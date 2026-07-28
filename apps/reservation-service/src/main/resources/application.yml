@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: reservation-service
+
+server:
+  # 8080/8081 은 개발 머신에서 다른 서비스와 충돌하기 쉬워 18080 대역을 쓴다.
+  port: 18081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.railgate: DEBUG
