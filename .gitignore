@@ -1,0 +1,30 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+
+# Java
+*.class
+hs_err_pid*
+replay_pid*
+
+# 로컬 환경 설정 (커밋 금지)
+.env
+*.local.yml
+application-local.yml
+
+# 부하 테스트 산출물
+load-test/**/results/

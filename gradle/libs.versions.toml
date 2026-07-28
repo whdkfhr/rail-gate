@@ -1,0 +1,18 @@
+# RailGate 의존성 버전 단일 출처(Single Source of Truth).
+#
+# 규칙:
+#  - 모듈의 build.gradle.kts 에 버전 문자열을 직접 쓰지 않는다.
+#  - 새 의존성은 반드시 여기에 먼저 등록한다.
+#  - 실제로 사용하는 것만 등록한다. "나중에 쓸 것 같아서" 미리 넣지 않는다.
+
+[versions]
+# Spring Boot 4.x 는 메이저 버전이다. 참고 자료 대부분이 3.x 기준이므로,
+# 자료 불일치가 부담되면 이 값을 "3.5.16" 으로 낮추면 된다.
+springBoot = "4.1.0"
+
+[libraries]
+# BOM. 개별 spring 라이브러리는 버전을 명시하지 않고 이 BOM 이 관리한다.
+spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
+
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }
