@@ -204,7 +204,7 @@
 | P-1 | 좌석 최종 방어선 위치 | `seat_inventory` 행 자체 (취소 후 재판매 때문에 `reservation_seat` UNIQUE 는 불가) | Phase 1 |
 | P-2 | 1인당 동시 선점 좌석 수 | 4석 | Phase 1 |
 | P-3 | 1인당 이벤트별 최대 확정 예약 | 1건 | Phase 1 |
-| P-4 | 좌석 선점 유효 시간 | `HELD` 5분, `PAYING` 진입 시 5분 추가 | Phase 1 |
+| P-4 | 좌석 선점 유효 시간 | `HELD` 5분. `PAYING` 전이 시 **`max(기존 expiresAt, NOW(3) + 5분)`** — 아래 상세 | Phase 1 |
 | P-5 | 예약(Reservation) 단계 유지 여부 | **제거 권장.** 홀드 → 결제 → 확정 3단계로 축소 | Phase 1 |
 | P-6 | 대기열 엔트리 TTL | 30분 | Phase 2 |
 | P-7 | Active 세션 TTL | 미수령 60초 / 수령 후 10분 (2단 TTL) | Phase 2 |
@@ -215,6 +215,78 @@
 | P-12 | 결제 실패 시 좌석 | 재시도 1회 허용 후 해제 | Phase 3 |
 | P-13 | 인증 방식 | 간이 JWT 발급 엔드포인트. OAuth 미도입 | Phase 1 |
 | P-14 | 이벤트 스키마 포맷 | JSON + `schemaVersion` 필드 (Avro/Schema Registry 는 과함) | Phase 4 |
+
+### P-4 상세 — 선점 만료 시각 정책
+
+**최종 만료 시각은 절대 앞당겨지지 않는다.**
+
+```
+HELD  진입: expires_at = NOW(3) + 5분
+PAYING 진입: expires_at = max(기존 expires_at, NOW(3) + 5분)
+SOLD  진입: expires_at = NULL
+```
+
+| 상황 | 결과 |
+|---|---|
+| 결제 데드라인이 기존 만료보다 **뒤** | 그 시각까지 **연장** |
+| 결제 데드라인이 기존 만료와 **같음** | 기존 값 **유지**. 거부하지 않음 |
+| 결제 데드라인이 기존 만료보다 **앞** | 기존 값 **유지**. 거부하지 않음 |
+
+**더 이른 데드라인을 거부하지 않는 이유.**
+결제 창(5분)이 홀드 잔여 시간보다 짧아지는 순간이 존재한다. 예를 들어 홀드 만료가 `T+5:00`
+인데 사용자가 `T+0:30`에 결제를 시작하면 `NOW(3)+5분 = T+5:30`이라 연장되지만,
+`T+0:10`에 시작하면 `T+5:10`, 정책상 5분이 아니라 3분짜리 결제 창을 쓰는 구성이라면
+`T+3:10 < T+5:00`이 되어 **정상 요청이 실패**한다.
+정책의 목적은 *만료를 앞당기지 않는 것*이지 *요청을 거부하는 것*이 아니다.
+
+**책임 분담.**
+
+| 계층 | 역할 |
+|---|---|
+| 도메인 (`Seat.startPayment`) | `max()` 계산으로 만료가 앞당겨지는 것을 **구조적으로 불가능**하게 만든다. 현재 시각을 모르므로 두 시각의 상대 관계만 다룬다 |
+| 인프라 (TASK-2) | **이미 만료된 홀드의 결제 시작을 막는 최종 방어선** |
+
+```sql
+-- 최종 방어선. 도메인은 이 조건을 대신할 수 없다.
+UPDATE seat_inventory
+   SET status='PAYING',
+       expires_at = GREATEST(expires_at, NOW(3) + INTERVAL 5 MINUTE)
+ WHERE id = ?
+   AND hold_id = ?
+   AND status = 'HELD'
+   AND expires_at > NOW(3);
+-- affected_rows = 0 → 이미 만료됐거나 다른 사용자가 가져갔다 → 409
+```
+
+`NOW(3)`을 쓰는 이유는 CLAUDE.md 규칙 7이다. 애플리케이션 시각을 쓰면 인스턴스 간
+클럭 드리프트로 만료 판정이 갈린다. 도메인 코드는 `Instant.now()`를 호출하지 않는다.
+
+### 확정 시 홀드 소멸
+
+`SOLD` 전이는 `hold_id`, `held_by`, `expires_at`을 모두 비운다.
+
+홀드는 *만료될 수 있는 임시 점유*이고 확정된 좌석에는 그런 것이 존재하지 않는다.
+홀드 이력이 필요하면 `seat_state_log`에 남기고 활성 상태 필드에는 남기지 않는다.
+
+**두 가지를 혼동하지 않는다.**
+
+| | 역할 |
+|---|---|
+| `expires_at = NULL` | **상태 조합을 명확하게 유지한다.** SOLD에 의미 없는 필드를 남기지 않아, 복원 검증이 손상된 행을 즉시 잡아낼 수 있다 |
+| 스위퍼의 `status IN ('HELD','PAYING')` | **I-11을 지키는 최종 방어선.** SOLD를 상태 술어로 배제하므로 `expires_at` 값과 무관하게 확정된 좌석은 회수되지 않는다 |
+
+`expires_at`을 비우는 것은 I-11의 방어 수단이 **아니다**. `expires_at`이 남아 있어도
+스위퍼 조건이 SOLD를 이미 제외하므로 I-11은 유지된다. 비우는 이유는 정합성 표현이지
+안전장치가 아니며, 스위퍼 조건에서 상태 술어를 빼면 아무것도 막지 못한다.
+
+소유권 검사는 **상태를 바꾸기 전에 기존 `hold_id`로** 수행한다. SQL에서는 `WHERE`가
+기존 값을 읽고 `SET`이 지우므로 순서가 자연히 보장된다.
+
+```sql
+UPDATE seat_inventory
+   SET status='SOLD', reservation_id=?, hold_id=NULL, held_by=NULL, expires_at=NULL
+ WHERE id=? AND hold_id=? AND status='PAYING';
+```
 
 ---
 

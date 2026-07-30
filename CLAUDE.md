@@ -6,6 +6,7 @@
 코드가 아니라 **측정 결과**로 증명하는 학습·포트폴리오 프로젝트다.
 
 기능 추가보다 **불변식 유지가 항상 우선**한다. 불변식 목록은 `docs/INVARIANTS.md`.
+OOP/DDD/TDD/Clean Code 기준은 `docs/DEVELOPMENT_GUIDE.md` 를 따른다.
 
 ---
 
@@ -30,6 +31,7 @@
 
 ```bash
 ./gradlew build                         # 전체 빌드 + 테스트
+./gradlew check                         # 테스트 + 아키텍처 규칙 검증
 ./gradlew :apps:queue-service:bootRun   # 실행 (toolchain JDK 자동 사용)
 ./gradlew :apps:reservation-service:bootRun
 ./gradlew projects                      # 모듈 구조 확인
@@ -61,6 +63,7 @@ apps/reservation-service  MVC       ─┼─> modules/reservation-domain ──
    입장 여부는 서명된 토큰 검증으로 확인한다. 좌석 API 가 대기열 서비스의 가용성에 종속되면 안 된다.
 5. 새 의존성은 `gradle/libs.versions.toml` 에 먼저 등록한다. 모듈 빌드 파일에 버전 문자열을 직접 쓰지 않는다.
 6. 저장소(repositories) 선언은 `settings.gradle.kts` 에만 둔다.
+7. `./gradlew check` 는 도메인 순수성, 모듈 경계, 외부 의존성 버전 직접 명시 금지를 검증한다.
 
 ---
 
