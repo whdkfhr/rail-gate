@@ -11,10 +11,12 @@ permissions:
   contents: read
 
 # 같은 PR 에 새 커밋이 올라오면 진행 중이던 실행을 취소한다.
-# PR 이벤트에서는 head_ref 가, main push 에서는 비어 있으므로 run_id 로 대체해
-# 서로 다른 push 가 상대를 취소하지 않게 한다.
+#
+# pull_request 에서는 PR 번호를 쓴다. 브랜치 이름(head_ref)으로 묶으면
+# fork 에서 온 동일한 이름의 브랜치가 서로의 실행을 취소할 수 있다.
+# push 에서는 github.ref 를 써서 같은 브랜치의 이전 실행만 취소한다.
 concurrency:
-  group: gradle-check-${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: gradle-check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
