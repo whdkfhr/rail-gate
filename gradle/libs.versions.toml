@@ -14,5 +14,31 @@ springBoot = "4.1.0"
 # BOM. 개별 spring 라이브러리는 버전을 명시하지 않고 이 BOM 이 관리한다.
 spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
 
+# ---------------------------------------------------------------------------
+# 아래 좌표들은 버전을 적지 않는다. Spring Boot BOM 이 관리한다.
+# 카탈로그에 등록하는 이유는 CLAUDE.md 규칙 5(새 의존성은 카탈로그에 먼저 등록) 이고,
+# 버전을 적지 않는 이유는 BOM 과 이중 관리하면 반드시 어긋나기 때문이다.
+# ---------------------------------------------------------------------------
+
+# 좌석 조건부 UPDATE. JPA 를 쓰지 않는 이유는 dirty checking 이
+# "조건부 UPDATE 한 번" 이라는 요구와 정면으로 충돌하기 때문이다.
+spring-jdbc = { module = "org.springframework:spring-jdbc" }
+mysql-connector = { module = "com.mysql:mysql-connector-j" }
+flyway-core = { module = "org.flywaydb:flyway-core" }
+flyway-mysql = { module = "org.flywaydb:flyway-mysql" }
+
+# 커넥션 풀. 1,000 동시 요청 테스트에서 커넥션 수를 제한해야
+# MySQL max_connections(기본 151) 를 넘기지 않는다.
+hikaricp = { module = "com.zaxxer:HikariCP" }
+
+# 통합 테스트는 실제 MySQL 로만 한다 (CLAUDE.md 규칙 26).
+# 임베디드 DB 는 행 잠금 동작이 달라 동시성 테스트의 의미가 없다.
+#
+# 주의: Spring Boot 4.1.0 이 import 하는 testcontainers-bom 은 2.0.5 이고,
+# Testcontainers 2.x 는 모든 모듈 아티팩트에 testcontainers- 접두사를 붙이도록 재편했다.
+# 1.x 좌표(org.testcontainers:mysql)는 1.21.4 에서 멈춰 있어 해석되지 않는다.
+testcontainers-mysql = { module = "org.testcontainers:testcontainers-mysql" }
+testcontainers-junit = { module = "org.testcontainers:testcontainers-junit-jupiter" }
+
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }

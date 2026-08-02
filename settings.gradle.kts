@@ -33,4 +33,5 @@ include(
     "modules:queue-domain",
     "modules:queue-token",
     "modules:reservation-domain",
+    "modules:reservation-infra",
 )
