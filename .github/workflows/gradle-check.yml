@@ -1,0 +1,68 @@
+name: Gradle Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# 기본 권한을 최소로 줄인다. 이 workflow 는 저장소를 읽기만 한다.
+permissions:
+  contents: read
+
+# 같은 PR 에 새 커밋이 올라오면 진행 중이던 실행을 취소한다.
+#
+# pull_request 에서는 PR 번호를 쓴다. 브랜치 이름(head_ref)으로 묶으면
+# fork 에서 온 동일한 이름의 브랜치가 서로의 실행을 취소할 수 있다.
+# push 에서는 github.ref 를 써서 같은 브랜치의 이전 실행만 취소한다.
+concurrency:
+  group: gradle-check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ./gradlew check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 빌드는 Gradle toolchain 이 Java 21 을 강제하지만,
+      # Gradle 자체를 구동할 JDK 가 먼저 있어야 한다.
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # reservation-infra 의 통합 테스트는 Testcontainers 로 MySQL 8.4 를 직접 띄운다.
+      # services 블록으로 MySQL 을 미리 올리지 않는 이유는, 그러면 테스트가
+      # 자기 수명주기를 통제하지 못하고 스키마 초기화 시점이 불명확해지기 때문이다.
+      # ubuntu-latest 러너에는 Docker 데몬이 이미 있으므로 가용성만 확인한다.
+      - name: Verify Docker
+        run: docker version
+
+      - name: Run Gradle check
+        run: ./gradlew check --no-daemon --stacktrace
+
+      # 실패 원인을 로그만으로 좇기 어려운 경우가 많다.
+      # 동시성 테스트는 특히 실패 시점의 리포트가 필요하다.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            **/build/test-results/**
+            **/build/reports/tests/**
+          retention-days: 7
+          # 테스트가 아예 실행되지 않아 리포트가 없을 수 있다.
+          # 그 경우 업로드 단계가 workflow 를 추가로 실패시키지 않게 한다.
+          if-no-files-found: ignore
