@@ -94,18 +94,20 @@ graph TB
 
 ## 3. 모듈 구성
 
-### 현재 (Phase 0)
+### 현재 (TASK-002A 시점)
 
 ```
 rail-gate/
 ├── settings.gradle.kts          # 모듈 등록 · 저장소 선언
-├── build.gradle.kts             # 공통 규약 (Java 21 toolchain, BOM, 테스트)
+├── build.gradle.kts             # 공통 규약 (Java 21 toolchain, BOM, 테스트, 아키텍처 검증)
 ├── gradle/libs.versions.toml    # 버전 단일 출처
 ├── CLAUDE.md
 ├── docs/
 │   ├── REQUIREMENTS.md
 │   ├── INVARIANTS.md
-│   └── ARCHITECTURE.md
+│   ├── ARCHITECTURE.md
+│   ├── DEVELOPMENT_GUIDE.md
+│   └── experiments/             # 실패 재현 · 벤치마크 기록
 ├── apps/
 │   ├── queue-service/           # WebFlux  :18080
 │   └── reservation-service/     # MVC      :18081
@@ -113,14 +115,21 @@ rail-gate/
     ├── common/                  # 에러 · 식별자 · Clock 추상화
     ├── queue-domain/            # 순수 Java. 순번 계산 · 상태 전이
     ├── queue-token/             # ★ 두 앱의 유일한 접점
-    └── reservation-domain/      # 순수 Java. 좌석 · 예약 · 결제 상태 머신
+    ├── reservation-domain/      # 순수 Java. 좌석 상태 머신 · 값 객체 · 복원
+    └── reservation-infra/       # MySQL 조건부 UPDATE · Flyway. JPA 없음
 ```
+
+**`reservation-infra` 의 위치.** 도메인 모듈이 상태 전이 *규칙* 을 표현하고,
+이 모듈이 동시성 *보장* 을 담당한다. 조건부 UPDATE 와 InnoDB 행 잠금이 여기에 있다.
+
+> `DEVELOPMENT_GUIDE` §6 은 `infra` 를 `apps/reservation-service` 하위 패키지로 그리고 있으나,
+> 실제 구조는 별도 모듈이다. 앱과 분리해야 인프라 어댑터를 앱 기동 없이 Testcontainers 로
+> 검증할 수 있다. 가이드 문서를 이 구조에 맞춰 갱신해야 한다.
 
 ### 계획된 추가 모듈
 
 | 모듈 | 추가 시점 | 이유 |
 |---|---|---|
-| `modules/reservation-infra` | Phase 1 | JPA · 멱등성 · PG 클라이언트. 지금 만들면 빈 껍데기 |
 | `modules/queue-redis` | Phase 2 | Lua 스크립트 · 키 전략 · Reactive Redis |
 | `modules/kafka-support` | Phase 4 | Outbox · Inbox · Retry/DLT |
 | `apps/mock-pg` | Phase 1 | 독립 PG 시뮬레이터 컨테이너 |
@@ -129,19 +138,48 @@ rail-gate/
 
 ### 의존 규칙
 
+**현재 실제 구성** (`./gradlew :apps:reservation-service:dependencies` 기준)
+
 ```mermaid
 graph LR
     QS["apps/queue-service"] --> QD["modules/queue-domain"]
     QS --> QT["modules/queue-token"]
     RS["apps/reservation-service"] --> RD["modules/reservation-domain"]
     RS --> QT
+    RI["modules/reservation-infra"] --> RD
     QD --> C["modules/common"]
     RD --> C
     QT --> C
 
     style QT fill:#bc6c25,color:#fff
     style C fill:#495057,color:#fff
+    style RI fill:#2d6a4f,color:#fff
 ```
+
+**`reservation-infra` 는 아직 앱에 배선되지 않았다.** 애플리케이션 서비스가 없어 소비자가 없기 때문이다.
+현재는 Testcontainers 테스트가 유일한 소비자이며, 이것이 인프라 어댑터를 앱 기동 없이
+검증할 수 있는 이유이기도 하다.
+
+배선은 애플리케이션 서비스가 생기는 시점(후속 Task)에 아래 형태가 된다.
+포트 인터페이스도 그때 도메인 쪽으로 추출한다. 구현체가 하나뿐인 인터페이스를 미리 만들지 않는다.
+
+```mermaid
+graph LR
+    RS["apps/reservation-service"] -.->|"후속 Task"| RI["modules/reservation-infra"]
+    RS --> RD["modules/reservation-domain"]
+    RI --> RD
+
+    style RI fill:#2d6a4f,color:#fff
+```
+
+**빌드가 강제하는 규칙** (`./gradlew check` → `verifyArchitectureRules`)
+
+| 규칙 | 위반 예 |
+|---|---|
+| `*-domain` main 소스에 Spring/JPA/Redis/Kafka import 금지 | `reservation-domain` 에 `@Entity` |
+| `modules → apps` 역방향 의존 금지 | |
+| `queue` ↔ `reservation` 경계 침범 금지 | `queue-domain` 이 `reservation-domain` 참조 |
+| 모듈 빌드 파일에 외부 의존성 버전 직접 명시 금지 | `implementation("x:y:1.0")` |
 
 | 규칙 | 내용 |
 |---|---|
