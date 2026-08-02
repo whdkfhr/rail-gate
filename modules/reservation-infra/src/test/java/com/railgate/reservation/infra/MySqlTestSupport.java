@@ -2,6 +2,8 @@ package com.railgate.reservation.infra;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import java.sql.Timestamp;
+import java.time.Instant;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -128,5 +130,39 @@ public abstract class MySqlTestSupport {
     protected static Long heldByOf(long seatId) {
         return jdbc().queryForObject(
                 "SELECT held_by FROM seat_inventory WHERE id = ?", Long.class, seatId);
+    }
+
+    protected static Long reservationIdOf(long seatId) {
+        return jdbc().queryForObject(
+                "SELECT reservation_id FROM seat_inventory WHERE id = ?", Long.class, seatId);
+    }
+
+    protected static Long versionOf(long seatId) {
+        return jdbc().queryForObject(
+                "SELECT version FROM seat_inventory WHERE id = ?", Long.class, seatId);
+    }
+
+    protected static Instant heldAtOf(long seatId) {
+        Timestamp value = jdbc().queryForObject(
+                "SELECT held_at FROM seat_inventory WHERE id = ?", Timestamp.class, seatId);
+        return value == null ? null : value.toInstant();
+    }
+
+    protected static Instant expiresAtOf(long seatId) {
+        Timestamp value = jdbc().queryForObject(
+                "SELECT expires_at FROM seat_inventory WHERE id = ?", Timestamp.class, seatId);
+        return value == null ? null : value.toInstant();
+    }
+
+    /**
+     * 만료까지 남은 시간을 DB 시각 기준으로 잰다.
+     *
+     * <p>애플리케이션 시각과 DB 시각을 섞어 비교하면 컨테이너와 호스트의 시계 차이만큼
+     * 오차가 생긴다. 만료 판정 기준이 {@code NOW(3)} 이므로 측정도 DB 안에서 한다.
+     */
+    protected static Long secondsUntilExpiry(long seatId) {
+        return jdbc().queryForObject(
+                "SELECT TIMESTAMPDIFF(SECOND, NOW(3), expires_at) FROM seat_inventory WHERE id = ?",
+                Long.class, seatId);
     }
 }

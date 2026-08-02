@@ -108,7 +108,8 @@ class SeatTest {
         @Test
         void 확정된_좌석은_더_이상_활성_홀드가_아니다() {
             // 홀드는 "만료될 수 있는 임시 점유" 다. 확정된 좌석에는 그런 것이 없다.
-            // 홀드 이력이 필요하면 seat_state_log 에 남기고, 활성 상태 필드에는 남기지 않는다.
+            // 홀드 이력은 활성 상태 필드에 남기지 않는다.
+            // 보존이 필요하면 seat_state_log 로 분리해야 하나 아직 구현되지 않았다 (규칙 32).
             Seat seat = soldSeat();
 
             assertThat(seat.isHeldBy(HOLD)).isFalse();

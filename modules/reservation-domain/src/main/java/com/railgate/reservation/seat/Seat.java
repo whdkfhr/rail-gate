@@ -150,7 +150,8 @@ public final class Seat {
      *
      * <p>홀드 이력을 활성 상태 필드에 남기지 않는 이유는, 남겨두면
      * "지금 이 좌석을 누가 잡고 있는가" 라는 질문에 이미 끝난 홀드가 답하게 되기 때문이다.
-     * 감사 이력은 {@code seat_state_log} 가 담당한다 (CLAUDE.md 규칙 32).
+     * 감사 이력은 CLAUDE.md 규칙 32 에 따라 {@code seat_state_log} 로 분리해야 하나
+     * <b>아직 구현되지 않았다</b>. 즉 현재는 확정 시점에 이전 홀드 정보가 소실된다.
      *
      * <p><b>{@code expiresAt} 을 비우는 것은 I-11 의 방어 수단이 아니다.</b>
      * I-11 을 지키는 것은 스위퍼의 {@code WHERE status IN ('HELD','PAYING')} 상태 술어이고,

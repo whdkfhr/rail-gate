@@ -17,16 +17,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 여러 요청이 같은 좌석을 동시에 선점하려 할 때 정확히 하나만 통과시킨다.
  *
  * <p>I-8 의 문장은 "하나의 좌석은 <b>최종적으로 한 예약에만 확정된다</b>" 이고,
- * 그 확정 단계는 아직 구현되지 않았다. 완성하려면 아래가 함께 있어야 한다.
+ * 그 확정 단계는 {@link JdbcSeatPaymentRepository} 가 담당한다.
+ * 선점만으로는 I-8 이 완결되지 않으며, 두 클래스가 함께 좌석 재고 수준의 전이를 이룬다.
  *
  * <pre>
- * UPDATE seat_inventory
- *    SET status='SOLD', reservation_id=?, hold_id=NULL, held_by=NULL, expires_at=NULL
- *  WHERE id=? AND hold_id=? AND status='PAYING';
+ * AVAILABLE ──hold──▶ HELD ──startPayment──▶ PAYING ──confirm──▶ SOLD
+ * (이 클래스)          (JdbcSeatPaymentRepository)
  * </pre>
- *
- * <p>{@code hold_id} 조건이 없으면 남의 홀드를 확정하거나 만료 처리가 확정된 좌석을
- * 해제할 수 있다 (I-11, CLAUDE.md 규칙 4). 선점만으로는 I-8 이 완결되지 않는다.
  *
  * <h2>왜 조건부 UPDATE 한 번인가</h2>
  *
@@ -55,12 +52,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * <h2>이 클래스가 보장하지 않는 것</h2>
  *
  * <ul>
- *   <li><b>I-8 의 확정 단계</b> — {@code PAYING → SOLD} 는 위에 적은 대로 별도 CAS 가 필요하다.</li>
- *   <li><b>I-9</b> 다좌석 전부-또는-전무 — 단일 벌크 UPDATE 의 {@code affected_rows} 검증이 담당한다.</li>
- *   <li><b>I-12</b> 1인당 좌석 상한 — {@code user_hold_quota} 카운터 행의 조건부 UPDATE 가 담당한다.</li>
+ *   <li><b>I-8 의 확정 단계</b> — {@link JdbcSeatPaymentRepository} 가 담당한다.</li>
+ *   <li><b>I-9</b> 다좌석 전부-또는-전무 — 단일 벌크 UPDATE 의 {@code affected_rows} 검증이 담당한다.
+ *       후속 Task.</li>
+ *   <li><b>I-12</b> 1인당 좌석 상한 — {@code user_hold_quota} 카운터 행의 조건부 UPDATE 가 담당한다.
+ *       후속 Task.</li>
  * </ul>
- *
- * <p>전부 후속 Task 다.
  *
  * <h2>운영 DataSource 요구사항</h2>
  *
