@@ -190,12 +190,12 @@ CLAUDE.md 규칙 32는 모든 좌석 상태 전이를 `seat_state_log`에 `actor
 
 `SOLD` 재확정이 0건인 것은 **저장소 CAS의 결과일 뿐 API 멱등성이 아니다.** 재요청에 최초 응답을 그대로 돌려주는 것은 멱등성 키 인프라의 책임이다(CLAUDE.md 규칙 17). 여기서 보장하는 것은 "이미 팔린 좌석의 주인이 바뀌지 않는다" 하나다.
 
-### I-9 / I-12 — 후속 Task
+### I-12 — 후속 Task (I-9는 TASK-002C에서 구현됨)
 
 | 불변식 | 필요한 것 |
 |---|---|
-| I-9 다좌석 전부-또는-전무 | 단일 벌크 UPDATE + `affected_rows == 요청 좌석 수` 검증, `FORCE INDEX (PRIMARY)`, id 정렬 |
-| I-12 1인당 좌석 상한 | `user_hold_quota` 카운터 행의 조건부 UPDATE |
+| I-9 다좌석 전부-또는-전무 | 단일 벌크 UPDATE + `affected_rows == 요청 좌석 수` 검증, `FORCE INDEX (PRIMARY)`, id 정렬 → **[TASK-002C](TASK-002C-multi-seat-atomic-hold.md)에서 구현됨** |
+| I-12 1인당 좌석 상한 | `user_hold_quota` 카운터 행의 조건부 UPDATE. 감소 경로(SOLD/release/expiry)가 없으면 카운터가 영구히 남으므로 함께 구현해야 한다 |
 
 ### 스키마 주석의 정정 불가 항목
 

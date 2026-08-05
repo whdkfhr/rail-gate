@@ -53,8 +53,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *
  * <ul>
  *   <li><b>I-8 의 확정 단계</b> — {@link JdbcSeatPaymentRepository} 가 담당한다.</li>
- *   <li><b>I-9</b> 다좌석 전부-또는-전무 — 단일 벌크 UPDATE 의 {@code affected_rows} 검증이 담당한다.
- *       후속 Task.</li>
+ *   <li><b>I-9</b> 다좌석 전부-또는-전무 — {@link JdbcMultiSeatHoldRepository} 가 담당한다.</li>
  *   <li><b>I-12</b> 1인당 좌석 상한 — {@code user_hold_quota} 카운터 행의 조건부 UPDATE 가 담당한다.
  *       후속 Task.</li>
  * </ul>
