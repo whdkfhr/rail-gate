@@ -36,9 +36,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * <ul>
  *   <li><b>I-15</b> 결제 승인 검증 — {@code payment.status='AUTHORIZED'} 조건이 없다.
  *       확정은 "좌석 재고가 이 예약에 귀속됐다" 만 뜻하며, 돈이 승인됐다는 뜻이 아니다.</li>
- *   <li><b>I-11</b> 만료 스위퍼와의 경쟁 — 스위퍼가 아직 없다. 확정과 회수가 동시에 일어나는
- *       상황은 스위퍼 구현과 함께 검증해야 한다.</li>
- *   <li><b>I-12</b> 1인당 좌석 상한. 감소 경로가 없어 진입만 구현하면 카운터가 영구히 남는다.
+ *   <li><b>I-11</b> 만료 스위퍼와의 경쟁 — {@link JdbcSeatExpiryRepository} 가 상대편이며
+ *       TASK-002D 에서 검증했다. 주의할 점은 아래 {@code confirm} 의 조건에
+ *       {@code expires_at} 이 <b>없다</b>는 것이다. 이미 만료된 PAYING 좌석도 확정되므로
+ *       스위퍼와의 경쟁은 예외가 아니라 정상 경로다.</li>
+ *   <li><b>I-12</b> 1인당 좌석 상한. {@code user_hold_quota} 테이블 자체가 없다.
+ *       <b>이 클래스의 확정은 quota 감소가 연동돼야 할 지점 중 하나다.</b>
+ *       상태 전이는 구현됐지만 quota 연동은 없다.
  *       (I-9 다좌석 원자성은 {@link JdbcMultiSeatHoldRepository} 가 담당한다)</li>
  *   <li>멱등성. 재확정이 0 건인 것은 CAS 결과일 뿐 최초 응답을 돌려주는 것과 다르다.</li>
  * </ul>

@@ -176,6 +176,8 @@ I-15가 요구하는 것은 확정 트랜잭션이 `payment.status='AUTHORIZED'`
 
 스위퍼가 아직 없다. 확정(`WHERE hold_id=? AND status='PAYING'`)과 회수(`WHERE status IN ('HELD','PAYING') AND expires_at<=NOW(3)`)가 **같은 행을 동시에 노리는 상황**은 스위퍼 구현과 함께 검증해야 한다(INVARIANTS.md의 `T-5`).
 
+*(TASK-002D에서 스위퍼가 구현되어 이 경쟁을 검증했다 — [TASK-002D-seat-expiry-sweeper.md](TASK-002D-seat-expiry-sweeper.md). 위 서술은 TASK-002B 시점 기준으로 유지한다.)*
+
 현재 확정이 `expires_at`을 NULL로 비우고 `SOLD`가 스위퍼의 상태 술어에서 제외된다는 것까지는 확인했지만, **두 CAS를 동시 출발시킨 테스트는 없다.**
 
 ### 규칙 32 감사 로그 — 미구현 ★
