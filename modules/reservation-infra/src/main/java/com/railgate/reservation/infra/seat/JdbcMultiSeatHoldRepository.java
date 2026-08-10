@@ -87,7 +87,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       구현할 때는 이 클래스의 선점 시 증가뿐 아니라, SOLD 확정
  *       ({@link JdbcSeatPaymentRepository})·만료 회수({@link JdbcSeatExpiryRepository})·
  *       자발적 해제에 대응하는 감소를 같은 트랜잭션 경계에서 연동해야 한다.
- *       앞의 두 상태 전이는 이미 있고 quota 연동만 없다. 자발적 해제는 인프라 경로부터 없다.</li>
+ *       세 경로의 상태 전이는 모두 구현됐고 quota 연동만 없다.</li>
  *   <li><b>규칙 32</b> 감사 로그 — {@code seat_state_log} 테이블과 기록 로직이 없다.
  *       {@code actor}/{@code reason}/{@code traceId} 를 전달할 앱 계층이 아직 없다.</li>
  *   <li><b>규칙 35</b> Micrometer 메트릭 — 선점 성공/실패 계측이 없다.</li>
