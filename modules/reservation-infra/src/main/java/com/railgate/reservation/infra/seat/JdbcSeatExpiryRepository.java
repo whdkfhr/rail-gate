@@ -70,8 +70,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * <ul>
  *   <li><b>주기 실행 배선</b> — {@code @Scheduled} 등록은 앱 계층의 몫이다.
  *       여기는 한 번의 스윕만 수행한다.</li>
- *   <li><b>자발적 해제</b> (FR-2.5) — 도메인 전이({@code Seat.release})는 있으나
- *       인프라/API 경로가 없다.</li>
+ *   <li><b>자발적 해제</b> (FR-2.5) — {@link JdbcSeatReleaseRepository} 가 담당한다.
+ *       저장소 CAS 까지는 있으나 REST API 와 멱등키 저장소는 없다.</li>
  *   <li><b>I-12</b> 1인당 좌석 상한 — {@code user_hold_quota} 테이블 자체가 없다.
  *       회수는 quota 감소가 연동돼야 할 지점 중 하나다.</li>
  *   <li><b>규칙 32</b> 감사 로그, <b>규칙 35</b> 메트릭 — 회수 이력과 계측이 없다.</li>
