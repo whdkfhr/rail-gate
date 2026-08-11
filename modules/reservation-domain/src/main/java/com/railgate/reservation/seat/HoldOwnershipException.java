@@ -8,7 +8,13 @@ package com.railgate.reservation.seat;
  * B 의 홀드가 파괴된다. 인프라 계층에서는 {@code WHERE hold_id = ?} 조건이 같은 역할을 한다
  * (CLAUDE.md 규칙 18).
  *
- * <p>앱 계층은 해제 경로에서 이 예외를 204 로 흡수한다. 이미 원하는 상태이기 때문이다.
+ * <p>앱 계층의 자연 멱등 해제 정책은 이 예외를 <b>성공 no-op(204)</b> 으로 매핑할 수 있다
+ * (규칙 18). 이는 대상의 <b>존재 여부와 소유 여부를 외부 응답에서 구분하지 않는 정책</b>
+ * 때문이지, 원하는 상태에 도달했기 때문이 아니다. 그 좌석은 여전히 다른 사용자가
+ * {@code HELD} 나 {@code PAYING} 으로 잡고 있을 수 있다.
+ *
+ * <p>따라서 <b>204 는 좌석이 {@code AVAILABLE} 임을 증명하지 않으며 요청자의 소유임을
+ * 뜻하지도 않는다.</b>
  */
 public class HoldOwnershipException extends RuntimeException {
 
