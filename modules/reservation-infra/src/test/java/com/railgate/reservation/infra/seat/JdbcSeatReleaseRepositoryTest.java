@@ -52,7 +52,8 @@ class JdbcSeatReleaseRepositoryTest extends MySqlTestSupport {
 
     @BeforeEach
     void setUp() {
-        multiHoldRepository = new JdbcMultiSeatHoldRepository(dataSource(), HOLD_DURATION);
+        multiHoldRepository = new JdbcMultiSeatHoldRepository(
+                dataSource(), transactionManager(), HOLD_DURATION);
         holdRepository = new JdbcSeatHoldRepository(dataSource(), HOLD_DURATION);
         paymentRepository = new JdbcSeatPaymentRepository(dataSource(), PAYMENT_DURATION);
         repository = new JdbcSeatReleaseRepository(dataSource());
@@ -71,8 +72,8 @@ class JdbcSeatReleaseRepositoryTest extends MySqlTestSupport {
             ids.add(id);
             seatIds.add(new SeatId(id));
         }
-        assertThat(multiHoldRepository.holdAll(seatIds, hold, user))
-                .isEqualTo(MultiSeatHoldOutcome.HELD);
+        // 다좌석 저장소는 최상위 트랜잭션을 만들지 않는다 (Task 2F). 픽스처도 경계를 열어야 한다.
+        inTransaction(() -> multiHoldRepository.holdAll(seatIds, hold, user));
         return ids;
     }
 
@@ -281,8 +282,8 @@ class JdbcSeatReleaseRepositoryTest extends MySqlTestSupport {
             // 그 사이 만료되어 회수되고 다른 사용자가 다시 잡았다고 가정한다.
             repository.releaseAll(oldHold, OWNER);
             HoldId newHold = holdOf(2);
-            multiHoldRepository.holdAll(
-                    ids.stream().map(SeatId::new).toList(), newHold, OTHER_USER);
+            inTransaction(() -> multiHoldRepository.holdAll(
+                    ids.stream().map(SeatId::new).toList(), newHold, OTHER_USER));
 
             int released = repository.release(oldHold, OWNER, staleCandidates);
 

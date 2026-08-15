@@ -6,6 +6,7 @@ import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.infra.MySqlTestSupport;
 import com.railgate.reservation.seat.SeatId;
+import com.railgate.reservation.seat.SeatUnavailableException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,7 +46,8 @@ class MultiSeatHoldConcurrencyTest extends MySqlTestSupport {
 
     @BeforeEach
     void setUp() {
-        repository = new JdbcMultiSeatHoldRepository(dataSource(), HOLD_DURATION);
+        repository = new JdbcMultiSeatHoldRepository(
+                dataSource(), transactionManager(), HOLD_DURATION);
         seatIds = new ArrayList<>();
         for (int i = 0; i < SEAT_POOL; i++) {
             seatIds.add(insertAvailableSeat(SCHEDULE_ID, (i + 1) + "A"));
@@ -190,15 +192,17 @@ class MultiSeatHoldConcurrencyTest extends MySqlTestSupport {
                     ready.countDown();
                     try {
                         start.await();
-                        MultiSeatHoldOutcome outcome = repository.holdAll(plan, holdId, userId);
-                        if (outcome == MultiSeatHoldOutcome.HELD) {
-                            succeeded.incrementAndGet();
-                            winners.add(holdId.asString());
-                            requestedSize.put(holdId.asString(), plan.size());
-                            winnerUser.set((int) userId.value());
-                        } else {
-                            failed.incrementAndGet();
-                        }
+                        // 각 작업자가 각자 독립된 트랜잭션을 연다.
+                        // 저장소는 트랜잭션을 만들지 않으므로 경계는 여기에 있다 (Task 2F).
+                        inTransaction(() -> repository.holdAll(plan, holdId, userId));
+
+                        succeeded.incrementAndGet();
+                        winners.add(holdId.asString());
+                        requestedSize.put(holdId.asString(), plan.size());
+                        winnerUser.set((int) userId.value());
+                    } catch (SeatUnavailableException e) {
+                        // 경합 실패는 예상 가능한 정상 결과다 (규칙 21). 오류로 세지 않는다.
+                        failed.incrementAndGet();
                     } catch (Exception e) {
                         errors.add(e.getClass().getSimpleName() + ": " + e.getMessage());
                     } finally {
