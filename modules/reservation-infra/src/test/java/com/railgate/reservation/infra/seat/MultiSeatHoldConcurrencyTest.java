@@ -192,8 +192,8 @@ class MultiSeatHoldConcurrencyTest extends MySqlTestSupport {
                     ready.countDown();
                     try {
                         start.await();
-                        // 각 작업자가 각자 독립된 트랜잭션을 연다.
-                        // 저장소는 트랜잭션을 만들지 않으므로 경계는 여기에 있다 (Task 2F).
+                        // 각 작업자가 독립된 최상위 트랜잭션을 연다.
+                        // 저장소는 그 안에서 NESTED savepoint 경계만 만든다 (Task 2F).
                         inTransaction(() -> repository.holdAll(plan, holdId, userId));
 
                         succeeded.incrementAndGet();
