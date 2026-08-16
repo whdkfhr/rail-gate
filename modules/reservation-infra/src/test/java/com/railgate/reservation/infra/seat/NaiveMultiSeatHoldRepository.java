@@ -3,6 +3,7 @@ package com.railgate.reservation.infra.seat;
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.seat.SeatId;
+import com.railgate.reservation.seat.SeatUnavailableException;
 import java.util.List;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -46,21 +47,24 @@ final class NaiveMultiSeatHoldRepository {
     }
 
     /**
-     * 좌석을 하나씩 순회하며 선점한다. 트랜잭션이 없으므로 각 성공은 즉시 확정된다.
+     * 좌석을 하나씩 순회하며 선점한다.
      *
-     * @return 하나라도 실패하면 {@link MultiSeatHoldOutcome#SEAT_UNAVAILABLE}.
-     *         <b>그러나 그때까지 성공한 좌석은 그대로 남는다.</b>
+     * <p>운영 구현과 같은 계약({@code void} + {@link SeatUnavailableException})을 쓴다.
+     * 비교 대상이 반환 타입이 아니라 <b>실패 후 남는 상태</b> 이기 때문이다.
+     *
+     * <p>차이는 하나다. 이 구현은 좌석마다 개별 UPDATE 를 확정하므로,
+     * 중간에 실패해도 <b>그때까지 성공한 좌석을 되돌릴 방법이 없다.</b>
      */
-    MultiSeatHoldOutcome holdAll(List<SeatId> seatIds, HoldId holdId, UserId userId) {
+    void holdAll(List<SeatId> seatIds, HoldId holdId, UserId userId) {
         for (SeatId seatId : seatIds) {
             int affected = jdbc.update(HOLD_ONE_SQL,
                     holdId.asString(), userId.value(), holdSeconds, seatId.value());
 
             if (affected != 1) {
                 // 앞서 잡은 좌석들을 되돌릴 방법이 없다.
-                return MultiSeatHoldOutcome.SEAT_UNAVAILABLE;
+                throw new SeatUnavailableException(
+                        "요청한 좌석 중 하나 이상을 선점할 수 없어 요청 전체가 실패했다");
             }
         }
-        return MultiSeatHoldOutcome.HELD;
     }
 }

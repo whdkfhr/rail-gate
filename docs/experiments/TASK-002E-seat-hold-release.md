@@ -268,7 +268,7 @@ Task 2E 신규 **36 tests**. `reservation-infra` 전체 143 → **179 tests, 0 f
 
 남은 것은 `user_hold_quota` 테이블과 증감 연동이다. 구현 전에 결정해야 할 것:
 
-1. **트랜잭션 경계를 누가 소유하는가.** 좌석 UPDATE와 quota 증감은 원자적으로 묶여야 한다. 그 순간 저장소들은 외부 트랜잭션에 참여하게 되고, Task 2C의 `JdbcMultiSeatHoldRepository`는 내부 `setRollbackOnly()`를 쓰므로 **`UnexpectedRollbackException` 위험이 있다.** 이 문제를 먼저 풀어야 한다.
+1. **트랜잭션 경계를 누가 소유하는가.** 좌석 UPDATE와 quota 증감은 원자적으로 묶여야 한다. 그 순간 저장소들은 외부 트랜잭션에 참여하게 되고, Task 2C의 `JdbcMultiSeatHoldRepository`는 내부 `setRollbackOnly()`를 쓰므로 **`UnexpectedRollbackException` 위험이 있다.** 이 문제를 먼저 풀어야 한다. *(→ [TASK-002F](TASK-002F-transaction-boundary.md)에서 재현하고 해소했다. 위 서술은 TASK-002E 시점 기준으로 유지한다.)*
 
 2. **부분 해제 시 감소량을 어떻게 정하는가.** 해제는 전부-또는-전무가 아니므로 `affected_rows`가 후보 수보다 적을 수 있다. quota는 **요청 좌석 수가 아니라 실제 변경된 행 수**만큼 줄여야 한다. 세 경로 모두 같은 원칙이 필요하다.
 

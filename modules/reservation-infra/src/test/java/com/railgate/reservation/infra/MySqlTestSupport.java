@@ -9,6 +9,8 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.mysql.MySQLContainer;
 
 /**
@@ -51,6 +53,7 @@ public abstract class MySqlTestSupport {
 
     private static HikariDataSource dataSource;
     private static JdbcTemplate jdbcTemplate;
+    private static DataSourceTransactionManager transactionManager;
 
     @BeforeAll
     static void startDatabase() {
@@ -60,6 +63,7 @@ public abstract class MySqlTestSupport {
         if (dataSource == null) {
             dataSource = createDataSource();
             jdbcTemplate = new JdbcTemplate(dataSource);
+            transactionManager = new DataSourceTransactionManager(dataSource);
             migrate(dataSource);
         }
     }
@@ -93,6 +97,44 @@ public abstract class MySqlTestSupport {
 
     protected static JdbcTemplate jdbc() {
         return jdbcTemplate;
+    }
+
+    /**
+     * 이 {@link DataSource} 를 관리하는 <b>공유</b> 트랜잭션 관리자.
+     *
+     * <p>외부 트랜잭션을 여는 쪽과 저장소는 <b>같은 {@code DataSource} 트랜잭션 리소스</b>를
+     * 관리해야 한다. <b>같은 관리자 인스턴스일 필요는 없다</b> — 같은 {@code DataSource} 를 가진
+     * 서로 다른 {@link DataSourceTransactionManager} 인스턴스도 같은 스레드에 바인딩된 리소스에
+     * 참여한다. {@code MultiSeatHoldWiringTest} 가 그것을 실제 MySQL 로 확인한다.
+     *
+     * <p>테스트에서 관리자를 공유하는 것은 <b>배선 의도를 명확히 하기 위해서일 뿐</b>이며,
+     * 인스턴스 동일성이 동작 조건은 아니다.
+     *
+     * <p>관리자는 무상태이고 트랜잭션 상태는 {@code TransactionSynchronizationManager} 의
+     * 스레드 로컬에 있으므로, 공유해도 각 스레드는 독립된 트랜잭션을 갖는다.
+     */
+    protected static DataSourceTransactionManager transactionManager() {
+        return transactionManager;
+    }
+
+    /**
+     * 애플리케이션 서비스가 소유할 트랜잭션 경계를 테스트에서 대신 연다.
+     *
+     * <p><b>이 헬퍼는 운영 코드의 책임을 대신하지 않는다.</b> 트랜잭션을 여는 주체가
+     * 저장소 밖에 있다는 사실 자체가 검증 대상이므로, 헬퍼가 그것을 감추면 안 된다.
+     * 그래서 이름과 반환 타입을 숨기지 않고 {@link TransactionTemplate} 을 그대로 돌려준다.
+     * 커밋·롤백 시점을 테스트가 명시적으로 정하게 하려는 것이다.
+     *
+     * <p>매번 새 템플릿을 만든다. <b>동시성 테스트의 각 작업자가 각자 독립된 트랜잭션을
+     * 연다는 의도를 코드에서 드러내기 위해서다.</b> 관리자는 공유하되 템플릿은 작업자마다 갖는다.
+     */
+    protected static TransactionTemplate newTransactionTemplate() {
+        return new TransactionTemplate(transactionManager);
+    }
+
+    /** 커밋으로 끝나는 트랜잭션 경계. 예외가 나면 롤백되고 그대로 전파된다. */
+    protected static void inTransaction(Runnable work) {
+        newTransactionTemplate().executeWithoutResult(status -> work.run());
     }
 
     protected static DataSource dataSource() {

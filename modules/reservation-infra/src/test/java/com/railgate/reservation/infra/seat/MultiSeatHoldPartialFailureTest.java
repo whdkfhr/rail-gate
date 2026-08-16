@@ -1,11 +1,13 @@
 package com.railgate.reservation.infra.seat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.infra.MySqlTestSupport;
 import com.railgate.reservation.seat.SeatId;
+import com.railgate.reservation.seat.SeatUnavailableException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -43,7 +45,8 @@ class MultiSeatHoldPartialFailureTest extends MySqlTestSupport {
 
     @BeforeEach
     void setUp() {
-        repository = new JdbcMultiSeatHoldRepository(dataSource(), HOLD_DURATION);
+        repository = new JdbcMultiSeatHoldRepository(
+                dataSource(), transactionManager(), HOLD_DURATION);
         singleSeatRepository = new JdbcSeatHoldRepository(dataSource(), HOLD_DURATION);
         seatIds = new ArrayList<>();
         for (String seatNo : List.of("1A", "2A", "3A")) {
@@ -70,11 +73,9 @@ class MultiSeatHoldPartialFailureTest extends MySqlTestSupport {
         NaiveMultiSeatHoldRepository naive =
                 new NaiveMultiSeatHoldRepository(dataSource(), HOLD_DURATION.toSeconds());
 
-        MultiSeatHoldOutcome outcome = naive.holdAll(allThree(), REQUESTER, REQUESTER_USER);
-
-        assertThat(outcome)
-                .as("요청자는 실패를 응답받는다")
-                .isEqualTo(MultiSeatHoldOutcome.SEAT_UNAVAILABLE);
+        assertThatThrownBy(() -> naive.holdAll(allThree(), REQUESTER, REQUESTER_USER))
+                .as("요청자는 실패를 통보받는다")
+                .isInstanceOf(SeatUnavailableException.class);
 
         // 그런데 첫 좌석은 이미 잡힌 채로 남아 있다.
         assertThat(statusOf(seatIds.get(0)))
@@ -90,9 +91,10 @@ class MultiSeatHoldPartialFailureTest extends MySqlTestSupport {
     @Test
     @DisplayName("B: 벌크 UPDATE + 롤백은 같은 조건에서 아무것도 남기지 않는다")
     void 벌크_UPDATE_는_같은_조건에서_부분_선점을_남기지_않는다() {
-        MultiSeatHoldOutcome outcome = repository.holdAll(allThree(), REQUESTER, REQUESTER_USER);
-
-        assertThat(outcome).isEqualTo(MultiSeatHoldOutcome.SEAT_UNAVAILABLE);
+        assertThatThrownBy(() -> inTransaction(
+                () -> repository.holdAll(allThree(), REQUESTER, REQUESTER_USER)))
+                .as("같은 실패를 같은 방식으로 통보받는다")
+                .isInstanceOf(SeatUnavailableException.class);
 
         assertThat(statusOf(seatIds.get(0))).isEqualTo("AVAILABLE");
         assertThat(statusOf(seatIds.get(2))).isEqualTo("AVAILABLE");
@@ -104,7 +106,8 @@ class MultiSeatHoldPartialFailureTest extends MySqlTestSupport {
     void 두_구현_모두_기존_점유자의_홀드는_유지한다() {
         NaiveMultiSeatHoldRepository naive =
                 new NaiveMultiSeatHoldRepository(dataSource(), HOLD_DURATION.toSeconds());
-        naive.holdAll(allThree(), REQUESTER, REQUESTER_USER);
+        assertThatThrownBy(() -> naive.holdAll(allThree(), REQUESTER, REQUESTER_USER))
+                .isInstanceOf(SeatUnavailableException.class);
 
         assertThat(holdIdOf(seatIds.get(1))).isEqualTo(OCCUPANT.asString());
         assertThat(heldByOf(seatIds.get(1))).isEqualTo(OCCUPANT_USER.value());
@@ -117,7 +120,8 @@ class MultiSeatHoldPartialFailureTest extends MySqlTestSupport {
     void 실패한_요청이_점유한_좌석_수가_두_구현의_차이다() {
         NaiveMultiSeatHoldRepository naive =
                 new NaiveMultiSeatHoldRepository(dataSource(), HOLD_DURATION.toSeconds());
-        naive.holdAll(allThree(), REQUESTER, REQUESTER_USER);
+        assertThatThrownBy(() -> naive.holdAll(allThree(), REQUESTER, REQUESTER_USER))
+                .isInstanceOf(SeatUnavailableException.class);
         long naiveLeftover = heldByRequester();
 
         // 원상 복구 후 올바른 구현으로 같은 요청을 반복한다.
@@ -127,7 +131,9 @@ class MultiSeatHoldPartialFailureTest extends MySqlTestSupport {
                  WHERE hold_id = ?
                 """, REQUESTER.asString());
 
-        repository.holdAll(allThree(), REQUESTER, REQUESTER_USER);
+        assertThatThrownBy(() -> inTransaction(
+                () -> repository.holdAll(allThree(), REQUESTER, REQUESTER_USER)))
+                .isInstanceOf(SeatUnavailableException.class);
         long bulkLeftover = heldByRequester();
 
         assertThat(naiveLeftover).as("개별 UPDATE 반복").isEqualTo(1);

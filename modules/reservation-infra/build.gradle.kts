@@ -14,10 +14,15 @@ plugins {
 //   HELD -> PAYING       (JdbcSeatPaymentRepository)
 //   PAYING -> SOLD       (JdbcSeatPaymentRepository)
 //
-// I-9 다좌석 전부-또는-전무는 저장소가 단독 호출되는 범위에서 확보됐다.
-//   여러 좌석 -> HELD    (JdbcMultiSeatHoldRepository, 벌크 UPDATE + 롤백)
-//   외부 트랜잭션에 참여하는 경우의 동작은 아직 검증되지 않았다.
-//   앱 배선 시 트랜잭션 경계를 애플리케이션 계층이 소유하도록 재검토해야 한다.
+// I-9 다좌석 전부-또는-전무가 확보됐다.
+//   여러 좌석 -> HELD    (JdbcMultiSeatHoldRepository, 벌크 UPDATE + 조건부 실패)
+//   Task 2C 시점에는 저장소가 단독 호출되는 범위에서만 확보됐고, 외부 트랜잭션 참여
+//   동작은 미검증이었다. Task 2F 에서 그 위험을 재현한 뒤 계약을 바꿨다. 지금은:
+//     - 저장소가 최상위 트랜잭션을 만들지 않는다.
+//     - 호출자가 연 동일 DataSource 의 트랜잭션에 참여한다.
+//     - 자신이 실행한 벌크 UPDATE 의 로컬 원자성을 위해 NESTED savepoint 경계는 만든다.
+//     - 경합은 SeatUnavailableException 으로 전달한다.
+//     - 활성 트랜잭션이 없으면 UPDATE 전에 거부한다.
 //
 // I-10 만료 회수와 I-11 만료-확정 경쟁도 저장소 수준에서 확보됐다.
 //   HELD/PAYING -> AVAILABLE  (JdbcSeatExpiryRepository, 후보 SELECT + 조건부 벌크 UPDATE)
