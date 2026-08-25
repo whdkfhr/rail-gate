@@ -68,6 +68,79 @@ flowchart LR
 의존 방향은 `apps -> modules`, `infra -> domain`으로 제한합니다. 도메인 모듈에는
 Spring, JPA, JDBC 의존성을 두지 않으며 이 규칙은 Gradle 검증 태스크에서도 검사합니다.
 
+## Engineering Practices
+
+### TDD: 실패를 먼저 재현하고 방어 코드를 추가
+
+모든 코드를 형식적으로 TDD로 작성했다고 주장하지는 않습니다. 대신 정합성에 영향을 주는
+핵심 경로에서는 다음 Red-Green-Refactor 루프를 지킵니다.
+
+| 단계 | RailGate에서의 적용 |
+|---|---|
+| Red | 테스트 전용 순진한 구현으로 경쟁 조건과 부분 갱신을 먼저 재현 |
+| Green | 조건부 `UPDATE`, 벌크 갱신, savepoint 등 가장 작은 방어를 추가 |
+| Refactor | 값 객체·도메인 예외·정책 객체로 의도를 정리하고 중복 제거 |
+| Record | 실험 조건, 결과, 선택 근거와 남은 위험을 `docs/experiments`에 기록 |
+
+동시성 테스트도 우연한 타이밍에 기대지 않습니다. `CyclicBarrier`와
+`CountDownLatch`로 실패 인터리빙을 고정하고, 같은 조건에서 순진한 구현은 실패하며
+운영 구현은 통과하는지 비교합니다. 그래서 테스트가 단순 회귀 방지를 넘어
+“현재 방어 코드가 무엇을 막고 있는가”까지 설명하도록 했습니다.
+
+### DDD: 불변식과 도메인 언어를 코드의 중심에 배치
+
+- **Bounded Context 분리**: Queue와 Reservation을 별도 모듈로 나누고 서로의 도메인
+  타입을 직접 참조하지 않도록 의존 방향을 제한했습니다.
+- **Ubiquitous Language 사용**: `Seat`, `HoldId`, `SeatStatus`, `SeatHoldPolicy`처럼
+  요구사항의 용어를 클래스와 메서드 이름에 그대로 사용합니다.
+- **도메인 순수성 유지**: `reservation-domain`은 Spring이나 JDBC 없이 상태 전이와
+  비즈니스 규칙만 표현하며, 실제 DB 원자성은 `reservation-infra`가 담당합니다.
+- **불변식 우선 설계**: 기능 목록보다 I-8~I-14 같은 불변식을 먼저 정의하고, 구현과
+  테스트가 어떤 불변식을 지키는지 추적합니다.
+
+현재 DDD 적용은 좌석 도메인과 모듈 경계에 집중되어 있습니다. 애플리케이션 서비스와
+포트 인터페이스는 아직 추출되지 않았으며, REST API 배선 단계에서 완성할 예정입니다.
+
+### OOP: 상태를 가진 객체에 행위를 맡기고 잘못된 상태를 차단
+
+- `Seat`는 상태를 외부 setter로 변경하지 않고 `hold`, `startPayment`, `confirm`,
+  `release`, `expire` 같은 도메인 행위로만 전이합니다.
+- `HoldId`, `UserId`, `SeatId`, `SeatCount`는 원시값을 감싼 불변 값 객체이며,
+  생성 시점에 형식과 범위를 검증합니다.
+- 한 좌석이 판단할 수 없는 다좌석 전부-또는-전무 규칙은 `SeatHoldPolicy`라는 도메인
+  서비스로 분리했습니다.
+- 상태 전이 위반과 소유권 위반을 전용 도메인 예외로 표현해 기술 예외나 HTTP 상태가
+  도메인 모델로 새어 들어오지 않게 했습니다.
+- DB 스냅샷 복원 시에도 상태와 필드 조합을 검증해 잘못된 객체가 메모리에 존재하지
+  못하도록 합니다.
+
+즉 도메인 객체는 규칙을 **표현**하고, JDBC 저장소는 경쟁 상황에서도 그 규칙을
+**강제**합니다. 객체 내부의 캡슐화만으로는 프로세스 간 동시성을 보장할 수 없다는 경계를
+명확히 구분했습니다.
+
+## Problems and Solutions
+
+개발 과정에서 정상 경로만 구현하지 않고, 먼저 깨지는 구현과 위험한 트랜잭션 조합을
+테스트로 만들었습니다.
+
+| 발견한 문제 | 실제로 관측한 결과 | 해결 방법 |
+|---|---|---|
+| `SELECT`로 확인한 뒤 `UPDATE` | 8명이 모두 성공 응답을 받았지만 DB의 실제 보유자는 1명 | 상태 조건을 포함한 단일 `UPDATE`와 `affected_rows`로 판정 |
+| 좌석별 개별 `UPDATE` 반복 | 중간 좌석 경합 시 실패한 요청의 일부 좌석이 `HELD`로 잔류 | 단일 벌크 `UPDATE` 후 요청 수와 변경 행 수가 다르면 롤백 |
+| 조회한 좌석 ID만 믿고 만료·해제 | 조회 후 확정되거나 재선점된 좌석까지 `AVAILABLE`로 되돌릴 수 있음 | `status`, `hold_id`, `expires_at`을 함께 비교하는 CAS로 stale 후보 거부 |
+| 저장소 내부 `setRollbackOnly()` | 외부 트랜잭션 참여 시 정상적인 경합이 커밋 시점의 `UnexpectedRollbackException`으로 변경 | 최상위 경계는 호출자가 소유하고, 저장소 변경만 NESTED savepoint로 롤백한 뒤 전용 예외 전파 |
+
+특히 마지막 문제는 단독 저장소 테스트에서는 드러나지 않고 외부 트랜잭션에 참여할 때만
+발생했습니다. 호출자가 예외를 트랜잭션 안에서 잡더라도 부분 선점이 남지 않도록 savepoint
+범위를 저장소의 벌크 갱신으로 제한했고, 서로 다른 `DataSource`가 연결되면 생성 시점에
+거부하도록 배선 계약도 추가했습니다.
+
+각 문제의 재현 코드, 대안 비교와 남은 한계는
+[`TASK-002A`](docs/experiments/TASK-002A-seat-hold-race.md),
+[`TASK-002C`](docs/experiments/TASK-002C-multi-seat-atomic-hold.md),
+[`TASK-002D`](docs/experiments/TASK-002D-seat-expiry-sweeper.md),
+[`TASK-002F`](docs/experiments/TASK-002F-transaction-boundary.md)에 남겨두었습니다.
+
 ## Key Decisions
 
 ### 1. MySQL을 좌석 정합성의 최종 방어선으로 사용
