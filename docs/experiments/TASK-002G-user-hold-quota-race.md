@@ -324,6 +324,9 @@ quota 행 잠금 보유 시간이 좌석 UPDATE 시간만큼 길어지므로 같
 
 **실제 전략은 Task 2G-B 의 실험 대상으로 남긴다.** 지금 `ExpiryCandidate` 운영 코드를 바꾸지 않는다.
 
+> *(→ [TASK-002G-C](TASK-002G-C-expiry-quota-attribution.md) 에서 귀속 불가능성을 결정적으로 재현하고
+> (scope, user) 그룹별 UPDATE 후보를 검증했다. 아래 서술은 TASK-002G-A 시점 기준으로 유지한다.)*
+
 #### 그 밖의 제약
 
 1. **여러 quota 행을 잠그게 된다.** 한 배치에 N 명의 사용자가 섞이면 quota 행 N 개를 잠근다.

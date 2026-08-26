@@ -297,6 +297,9 @@ tx {
 
 ## 10. Task 2G-C 권장 범위 — 만료 사용자별 집계
 
+> *(→ [TASK-002G-C](TASK-002G-C-expiry-quota-attribution.md) 에서 수행했다.
+> 아래는 TASK-002G-B 시점의 계획이며 그대로 유지한다.)*
+
 2G-A 가 남긴 문제를 그대로 이어받는다. **이번 Task 에서 임의로 해결하지 않았다** —
 `ExpiryCandidate` 도 `JdbcSeatExpiryRepository` 도 바꾸지 않았다.
 
