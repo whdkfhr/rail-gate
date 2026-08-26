@@ -1,5 +1,6 @@
 package com.railgate.reservation.infra.quota;
 
+import java.util.List;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -103,6 +104,39 @@ final class Task2gQuotaCounter {
     /** @return 실제로 감소했는지. {@code false} 면 음수가 될 요청이라 거부됐다. */
     boolean release(long userId, long scopeId, int seats) {
         return jdbc.update(RELEASE_SQL, seats, userId, scopeId, seats) == 1;
+    }
+
+    /**
+     * 카운터 행을 <b>명시적으로 잠근다</b> ({@code SELECT ... FOR UPDATE}).
+     *
+     * <h2>목적은 값 판단이 아니라 잠금 순서 통일이다</h2>
+     *
+     * <p>이 메서드로 읽은 {@code held_seats} 로 상한을 판단하면 안 된다. 그것은 규칙 8 이 금지한
+     * 집계-후-판단으로 되돌아가는 것이다. 상한 검사는 여전히 {@link #tryAcquire} 의
+     * <b>조건부 UPDATE</b> 가 원자적으로 수행한다.
+     *
+     * <p>여기서 얻는 것은 <b>quota 행을 좌석보다 먼저 잠근다</b> 는 순서뿐이다.
+     * 감소 경로는 실제 {@code affected_rows} 를 좌석 UPDATE 후에야 알 수 있어서
+     * "먼저 잠그고 나중에 값을 정한다" 가 필요하다.
+     *
+     * <h2>전제와 계약</h2>
+     *
+     * <ul>
+     *   <li><b>활성 트랜잭션 안에서만 호출한다.</b> 트랜잭션이 없으면 잠금이 문장 종료와 함께
+     *       사라져 순서 통일이 성립하지 않는다.</li>
+     *   <li><b>행이 있다고 가정한다.</b> 없으면 {@code null} 을 돌려주고 <b>아무것도 잠그지 않는다</b> —
+     *       존재하지 않는 행에는 잠글 대상이 없다. 첫 요청 경로는 {@link #ensureRow} 로
+     *       행을 먼저 확보해야 한다.</li>
+     * </ul>
+     *
+     * @return 잠근 시점의 {@code held_seats}. 행이 없으면 {@code null}.
+     */
+    Integer lockQuotaRow(long userId, long scopeId) {
+        List<Integer> rows = jdbc.queryForList(
+                "SELECT held_seats FROM " + TABLE
+                        + " WHERE user_id = ? AND quota_scope_id = ? FOR UPDATE",
+                Integer.class, userId, scopeId);
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     Integer heldSeats(long userId, long scopeId) {
