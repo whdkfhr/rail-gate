@@ -289,6 +289,9 @@ tx {
 
 ## 9. 범위 키는 여전히 미결정이다
 
+> *(→ [TASK-002G-D](TASK-002G-D-quota-scope-contract.md) 에서 **판매 이벤트(`sale_event_id`) 단위**로 결정됐다.
+> 아래 내용은 당시의 미결정 상태를 기록한 역사적 설명이다.)*
+
 2G-A §9 의 결론을 그대로 유지한다. `seat_inventory` 는 `schedule_id` 만 가지고 event 모델이 없다.
 `schedule_id` 로 두면 편을 바꿔가며 잡을 수 있어 사재기 방지가 무력해진다.
 **이번 Task 에서도 확정하지 않았고**, 실험은 중립적인 `quota_scope_id` 를 쓴다.

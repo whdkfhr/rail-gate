@@ -108,16 +108,30 @@
 - **깨지는 조건** — 스위퍼가 `WHERE expires_at <= NOW()` 만 보고 상태를 확인하지 않으면 확정된 좌석을 풀어버린다. 확정 쿼리에 `hold_id` 조건이 없으면 남의 홀드를 확정한다.
 - **검증 방법** — `T-5`: 스위퍼와 확정 UPDATE 를 `CountDownLatch` 로 동시 출발 → 좌석이 `SOLD` 또는 `AVAILABLE` 중 하나로 확정되고 **중간 상태 없음**. 돈이 나갔는데 좌석이 없는 경우 0건.
 
-### I-12. 한 사용자는 동시에 4개를 초과하는 활성 선점을 가질 수 없다
+### I-12. 한 사용자는 동일 판매 이벤트에서 4개를 초과하는 활성 선점을 가질 수 없다
 
+> **현재 상태 — 계약 결정과 테스트 전용 검증 단계다. 운영에 구현되지 않았다.**
+> `user_hold_quota` 테이블·운영 저장소·애플리케이션 서비스가 아직 없다.
+
+- **범위** — `sale_event_id` 단위. 같은 판매 이벤트의 **여러 열차 운행편을 합산**한다.
+  서로 다른 판매 이벤트의 quota 는 독립이다. `SOLD`·`AVAILABLE` 은 활성 선점이 아니다.
+  `schedule_id` 를 범위로 쓰면 운행편만 바꿔 상한을 우회할 수 있다
+  ([TASK-002G-D](experiments/TASK-002G-D-quota-scope-contract.md) 에서 재현).
 - **보장 메커니즘** — `user_hold_quota` 카운터 행에 **조건부 UPDATE**.
   ```sql
   UPDATE user_hold_quota SET held_seats = held_seats + :n
-   WHERE user_id=:u AND event_id=:e AND held_seats + :n <= 4;
+   WHERE sale_event_id = :saleEventId
+     AND user_id       = :userId
+     AND held_seats + :n <= 4;
   -- affected = 0 → 429 QUOTA_EXCEEDED
   ```
+- **PRIMARY KEY 와 잠금 순서** — `(sale_event_id, user_id)`.
+  여러 quota 행을 잠그는 경로(만료 배치)는 그 키의 **오름차순**으로 잠근 뒤 좌석을 갱신한다
+  (quota → seat, [TASK-002G-B](experiments/TASK-002G-B-quota-lock-order.md)).
 - **깨지는 조건** — `SELECT COUNT(*) WHERE held_by=:userId` 로 검증하면 **다른 트랜잭션의 미커밋 홀드가 보이지 않는다.** 같은 사용자가 3석 요청 2개를 동시에 보내면 둘 다 "내 것 3석"만 보고 통과해 6석을 점유한다.
+  범위를 운행편으로 잡아도 같은 결과가 된다 — 카운터 행 자체가 분리되기 때문이다.
 - **검증 방법** — 동일 사용자가 3석 요청 2개를 동시 전송 → 하나만 201, 하나는 429. 실제 `HELD` 좌석 수 ≤ 4.
+  같은 판매 이벤트의 **서로 다른 운행편**으로 보내도 결과가 같아야 한다.
 
 ### I-13. 판매된 좌석 수 ≤ 해당 스케줄의 총 좌석 수
 

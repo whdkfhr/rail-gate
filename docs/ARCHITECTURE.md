@@ -194,6 +194,47 @@ Phase 6 에서 대기열을 샤딩할 때 도메인을 건드리지 않고 인�
 
 ---
 
+## 3-1. 예매 도메인 모델 관계 (목표 구조)
+
+> **현재 구현과 목표 구조를 구분한다.** 아래는 [TASK-002G-D](experiments/TASK-002G-D-quota-scope-contract.md)
+> 에서 결정한 **계약**이며, `SaleEvent` 와 `TrainSchedule` 은 **아직 구현되지 않았다.**
+> 지금 존재하는 것은 `seat_inventory`(V1) 하나이고 `schedule_id` 는 참조 대상 없는 식별자다.
+
+```mermaid
+graph LR
+    SE["SaleEvent<br/>판매 회차<br/><i>미구현</i>"] -->|"1 : N"| TS["TrainSchedule<br/>열차 운행편<br/><i>미구현</i>"]
+    TS -->|"1 : N"| SI["SeatInventory<br/><b>구현됨 (V1)</b>"]
+    SE --> Q["UserHoldQuota<br/>(saleEventId, userId)<br/><i>미구현</i>"]
+    U["User"] --> Q
+
+    style SI fill:#2d6a4f,color:#fff
+    style SE fill:#495057,color:#fff
+    style TS fill:#495057,color:#fff
+    style Q fill:#495057,color:#fff
+```
+
+| 관계 | 계약 |
+|---|---|
+| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. 판매 시작 후 소속 변경 금지 |
+| `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (현재 `schedule_id`) |
+| (`SaleEvent`, `User`) → `UserHoldQuota` | **I-12 의 범위는 판매 이벤트 단위**다. 같은 회차의 여러 운행편을 합산한다 |
+
+### 대기열 입장 범위와 quota 범위 (목표 설계)
+
+> **현재 `queue-service` 는 골격 단계다.** Spring Boot 애플리케이션 클래스와 컨텍스트 로드 테스트만
+> 있고, `queue-domain`·`queue-token` 에는 아직 소스가 없다. Redis 키 계약(`rg:{evt:E1}:*`)과
+> 입장 토큰의 `evt` 클레임은 §2 의 **목표 설계**이며 구현되지 않았다.
+
+목표 대기열 설계는 **이벤트 단위 입장 제어**를 사용한다. quota 범위를 판매 이벤트로 정한
+([TASK-002G-D](experiments/TASK-002G-D-quota-scope-contract.md)) 결과, 두 경계를 맞추면
+"이 회차에 입장했고, 이 회차에서 4석까지" 가 하나의 문장이 된다.
+
+> **대기열의 `event` 식별자와 예약 도메인의 `SaleEvent` 식별자를 동일하게 쓸지, 별도 매핑할지는
+> 후속 작업에서 결정한다.** 대기열이 더 잘게 쪼개질 여지가 있고(예: 노선별 입장 제어),
+> 그 결정은 Phase 2 의 대기열 Task 몫이다.
+
+---
+
 ## 4. 저장소별 책임 경계
 
 | | Redis | MySQL | Kafka |

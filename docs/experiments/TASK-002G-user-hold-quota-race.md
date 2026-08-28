@@ -340,6 +340,9 @@ quota 행 잠금 보유 시간이 좌석 UPDATE 시간만큼 길어지므로 같
 
 ## 9. 범위 키 — `event_id` vs `schedule_id` (미결정)
 
+> *(→ [TASK-002G-D](TASK-002G-D-quota-scope-contract.md) 에서 **판매 이벤트(`sale_event_id`) 단위**로 결정됐다.
+> 아래 내용은 당시의 미결정 상태를 기록한 역사적 설명이다.)*
+
 ### 사실
 
 - INVARIANTS.md 예시는 `user_hold_quota(user_id, event_id)` 를 쓴다.
