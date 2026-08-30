@@ -32,7 +32,8 @@ RailGate는 이 문제를 단순 CRUD가 아닌 **불변식 중심 설계**, **D
 | 다좌석 선점 | 완료 | 단일 벌크 `UPDATE`, 전부 성공 또는 전부 롤백 |
 | 만료·자발적 해제 | 완료 | stale 후보 격리, 상태와 `hold_id`를 함께 검증하는 CAS |
 | 트랜잭션 경계 | 완료 | 외부 트랜잭션 참여, NESTED savepoint로 저장소 로컬 원자성 보장 |
-| 사용자별 선점 상한 | 실험 중 | **범위를 판매 이벤트 단위로 결정.** 경쟁 조건·잠금 순서·만료 귀속 실험 완료. **운영 모델·migration·앱 배선은 미구현** |
+| 사용자별 선점 상한 | 실험 중 | **범위를 판매 이벤트 단위로 결정.** 경쟁 조건·잠금 순서·만료 귀속 실험 완료. **migration·앱 배선은 미구현** |
+| 판매 회차·운행편 도메인 | 진행 중 | `SaleEvent` 상태 전이표와 `TrainSchedule` 소속 불변을 순수 도메인으로 구현. **테이블·저장소는 미구현** |
 | 애플리케이션 API | 예정 | 유스케이스, 포트, REST API, 멱등키 저장소 배선 |
 | 대기열·결제·운영 | 예정 | Redis 대기열, 입장 토큰, Mock PG, 관측성, 부하 테스트 |
 
@@ -91,8 +92,10 @@ Spring, JPA, JDBC 의존성을 두지 않으며 이 규칙은 Gradle 검증 태�
 
 - **Bounded Context 분리**: Queue와 Reservation을 별도 모듈로 나누고 서로의 도메인
   타입을 직접 참조하지 않도록 의존 방향을 제한했습니다.
-- **Ubiquitous Language 사용**: `Seat`, `HoldId`, `SeatStatus`, `SeatHoldPolicy`처럼
-  요구사항의 용어를 클래스와 메서드 이름에 그대로 사용합니다.
+- **Ubiquitous Language 사용**: `Seat`, `HoldId`, `SeatStatus`, `SeatHoldPolicy`,
+  `SaleEvent`처럼 요구사항의 용어를 클래스와 메서드 이름에 그대로 사용합니다.
+  일반적인 `EventId` 대신 `SaleEventId`를 쓴 것도 도메인 이벤트·Kafka 이벤트·대기열
+  이벤트와 구분하기 위한 선택입니다.
 - **도메인 순수성 유지**: `reservation-domain`은 Spring이나 JDBC 없이 상태 전이와
   비즈니스 규칙만 표현하며, 실제 DB 원자성은 `reservation-infra`가 담당합니다.
 - **불변식 우선 설계**: 기능 목록보다 I-8~I-14 같은 불변식을 먼저 정의하고, 구현과
@@ -129,6 +132,7 @@ Spring, JPA, JDBC 의존성을 두지 않으며 이 규칙은 Gradle 검증 태�
 | 좌석별 개별 `UPDATE` 반복 | 중간 좌석 경합 시 실패한 요청의 일부 좌석이 `HELD`로 잔류 | 단일 벌크 `UPDATE` 후 요청 수와 변경 행 수가 다르면 롤백 |
 | 조회한 좌석 ID만 믿고 만료·해제 | 조회 후 확정되거나 재선점된 좌석까지 `AVAILABLE`로 되돌릴 수 있음 | `status`, `hold_id`, `expires_at`을 함께 비교하는 CAS로 stale 후보 거부 |
 | 저장소 내부 `setRollbackOnly()` | 외부 트랜잭션 참여 시 정상적인 경합이 커밋 시점의 `UnexpectedRollbackException`으로 변경 | 최상위 경계는 호출자가 소유하고, 저장소 변경만 NESTED savepoint로 롤백한 뒤 전용 예외 전파 |
+| 선점 상한의 범위를 운행편으로 잡음 | 같은 판매 회차인데도 운행편마다 카운터가 분리되어 상한 4석이 6석·8석으로 우회됨 | 범위를 판매 회차(`sale_event_id`) 단위로 확정하고, 운행편의 회차 소속을 바꿀 수 없는 구조로 모델링 |
 
 특히 마지막 문제는 단독 저장소 테스트에서는 드러나지 않고 외부 트랜잭션에 참여할 때만
 발생했습니다. 호출자가 예외를 트랜잭션 안에서 잡더라도 부분 선점이 남지 않도록 savepoint
@@ -245,7 +249,7 @@ Testcontainers 통합 테스트 때문에 Docker가 필요합니다. 아직 서�
 
 ## Roadmap
 
-1. 사용자별 선점 상한의 잠금 순서와 세 이탈 경로(확정·만료·해제) 연동
+1. 판매 회차·운행편의 운영 스키마와 사용자별 선점 상한의 세 이탈 경로(확정·만료·해제) 연동
 2. 애플리케이션 서비스와 포트, REST API, 멱등키 저장소 구성
 3. Redis Lua 기반 대기열과 서명된 입장 토큰, SSE 구현
 4. Mock PG의 authorize/capture 흐름과 실패 복구 구현

@@ -112,6 +112,9 @@
 
 > **현재 상태 — 계약 결정과 테스트 전용 검증 단계다. 운영에 구현되지 않았다.**
 > `user_hold_quota` 테이블·운영 저장소·애플리케이션 서비스가 아직 없다.
+> 범위를 정하는 `SaleEvent`·`TrainSchedule` 은
+> [TASK-002G-E-A](experiments/TASK-002G-E-A-sale-event-domain.md) 에서 **순수 도메인 모델로만**
+> 구현됐다. 소속 불변은 도메인이 구조로 강제하지만 DB 차원의 차단은 아직 없다.
 
 - **범위** — `sale_event_id` 단위. 같은 판매 이벤트의 **여러 열차 운행편을 합산**한다.
   서로 다른 판매 이벤트의 quota 는 독립이다. `SOLD`·`AVAILABLE` 은 활성 선점이 아니다.

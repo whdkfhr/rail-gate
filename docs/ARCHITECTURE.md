@@ -197,27 +197,48 @@ Phase 6 에서 대기열을 샤딩할 때 도메인을 건드리지 않고 인�
 ## 3-1. 예매 도메인 모델 관계 (목표 구조)
 
 > **현재 구현과 목표 구조를 구분한다.** 아래는 [TASK-002G-D](experiments/TASK-002G-D-quota-scope-contract.md)
-> 에서 결정한 **계약**이며, `SaleEvent` 와 `TrainSchedule` 은 **아직 구현되지 않았다.**
-> 지금 존재하는 것은 `seat_inventory`(V1) 하나이고 `schedule_id` 는 참조 대상 없는 식별자다.
+> 에서 결정한 **계약**이다. `SaleEvent` 와 `TrainSchedule` 은
+> [TASK-002G-E-A](experiments/TASK-002G-E-A-sale-event-domain.md) 에서 **순수 도메인 모델로만 구현됐다.**
+> **테이블·마이그레이션·저장소는 아직 없다.** 지금 존재하는 테이블은 `seat_inventory`(V1) 하나이고
+> `schedule_id` 는 참조 대상 없는 식별자다. `UserHoldQuota` 는 테스트 전용이다.
 
 ```mermaid
 graph LR
-    SE["SaleEvent<br/>판매 회차<br/><i>미구현</i>"] -->|"1 : N"| TS["TrainSchedule<br/>열차 운행편<br/><i>미구현</i>"]
+    SE["SaleEvent<br/>판매 회차<br/><i>도메인만 구현</i>"] -->|"1 : N"| TS["TrainSchedule<br/>열차 운행편<br/><i>도메인만 구현</i>"]
     TS -->|"1 : N"| SI["SeatInventory<br/><b>구현됨 (V1)</b>"]
     SE --> Q["UserHoldQuota<br/>(saleEventId, userId)<br/><i>미구현</i>"]
     U["User"] --> Q
 
     style SI fill:#2d6a4f,color:#fff
-    style SE fill:#495057,color:#fff
-    style TS fill:#495057,color:#fff
+    style SE fill:#1b4332,color:#fff
+    style TS fill:#1b4332,color:#fff
     style Q fill:#495057,color:#fff
 ```
 
-| 관계 | 계약 |
-|---|---|
-| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. 판매 시작 후 소속 변경 금지 |
-| `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (현재 `schedule_id`) |
-| (`SaleEvent`, `User`) → `UserHoldQuota` | **I-12 의 범위는 판매 이벤트 단위**다. 같은 회차의 여러 운행편을 합산한다 |
+| 관계 | 계약 | 현재 |
+|---|---|---|
+| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. **소속은 바뀌지 않는다** | 도메인에서 강제. `TrainSchedule` 은 소속을 바꿀 수단이 없다 (모든 필드 final, 변경자 없음). DB 차원 차단은 없다 |
+| `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (현재 `schedule_id`) | `schedule_id` 는 아직 참조 대상 없는 식별자 |
+| (`SaleEvent`, `User`) → `UserHoldQuota` | **I-12 의 범위는 판매 이벤트 단위**다. 같은 회차의 여러 운행편을 합산한다 | 테스트 전용. 운영 테이블 없음 |
+
+### 판매 회차 상태 (도메인 구현됨)
+
+```
+            open                      close
+SCHEDULED   → OPEN (now >= opensAt)   → CLOSED   (오픈 전 취소)
+OPEN        ✗ 전이 위반                → CLOSED
+CLOSED      ✗ 전이 위반                ✗ 전이 위반   ★ 터미널
+```
+
+`CLOSED` 를 터미널로 둔 이유는 quota 의 의미 때문이다. 종료된 회차의 quota 를 정리한 뒤 다시 열면
+"이 사용자가 이 회차에서 몇 석을 잡고 있었는가" 의 답이 달라진다. 재판매는 새 회차로 한다.
+
+`open` 은 판정 시각을 파라미터로 받고(`now >= opensAt`, DB 의 `opens_at <= NOW(3)` 과 같은 경계),
+`close` 는 받지 않는다 — `closes_at` 은 **예정** 시각일 뿐이고 조기 마감은 정상 운영 행위다.
+근거는 [TASK-002G-E-A](experiments/TASK-002G-E-A-sale-event-domain.md) §3 에 있다.
+
+> **도메인 모델은 동시 전이를 막지 않는다.** 운영 방어선은
+> `WHERE id=? AND status='SCHEDULED' AND opens_at <= NOW(3)` 조건부 UPDATE 이며 아직 없다.
 
 ### 대기열 입장 범위와 quota 범위 (목표 설계)
 

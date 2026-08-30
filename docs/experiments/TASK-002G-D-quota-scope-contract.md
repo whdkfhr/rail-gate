@@ -282,8 +282,8 @@ Task 2G-A 가 이미 검증했고**, 이 Task 가 더하는 것은 그 검사가
 | 항목 | 내용 |
 |---|---|
 | **I-12 는 여전히 운영 미구현** | 이 Task 는 범위를 결정했을 뿐이다. 운영 테이블·저장소·서비스가 없다 |
-| **`SaleEvent` 모델 부재** | quota 의 FK 대상이 없어 마이그레이션을 쓸 수 없다 |
-| **소속 변경 금지의 강제 수단 없음** | 테스트 fixture 는 거부하지만 운영에서는 FK 만으로 막히지 않는다. 판매 시작 후 변경을 막는 상태 규칙이 필요하다 |
+| **`SaleEvent` 모델 부재** | quota 의 FK 대상이 없어 마이그레이션을 쓸 수 없다 *(→ [2G-E-A](TASK-002G-E-A-sale-event-domain.md) 에서 도메인 모델을 만들었다. 테이블은 여전히 없다)* |
+| **소속 변경 금지의 강제 수단 없음** | 테스트 fixture 는 거부하지만 운영에서는 FK 만으로 막히지 않는다. 판매 시작 후 변경을 막는 상태 규칙이 필요하다 *(→ [2G-E-A](TASK-002G-E-A-sale-event-domain.md) §4 는 상태 규칙 대신 **구조적 불변**을 택했다. 오픈 전 재배정도 안전하지 않기 때문이다. DB 차원 차단은 미해결)* |
 | **비정규화 여부 미결정** | 매 선점마다 `train_schedule` 조인이 필요할 수 있다. 측정하지 않았다 |
 | **대기열 범위와의 정합** | `queue-service` 가 골격 단계라 대기열 쪽 계약 자체가 아직 없다. 두 식별자를 같게 둘지 미결정이며, 어긋나면 "입장은 됐는데 quota 범위가 다른" 상황이 생긴다 |
 | **판매 이벤트 종료 후 정리** | 카운터를 언제 어떻게 비울지 정해지지 않았다 |
@@ -294,10 +294,13 @@ Task 2G-A 가 이미 검증했고**, 이 Task 가 더하는 것은 그 검사가
 ## 12. 후속 Task 범위
 
 1. **Task 2G-E — `SaleEvent` / `train_schedule` 운영 모델**
-   - `SaleEvent` aggregate 와 상태(SCHEDULED/OPEN/CLOSED)
-   - `train_schedule` 마이그레이션과 `sale_event_id` FK
-   - 판매 시작 후 소속 변경 금지를 상태 규칙으로 강제
-   - `seat_inventory` 비정규화 여부 측정 후 결정
+   - ~~`SaleEvent` aggregate 와 상태(SCHEDULED/OPEN/CLOSED)~~
+     → [2G-E-A](TASK-002G-E-A-sale-event-domain.md) 완료
+   - `train_schedule` 마이그레이션과 `sale_event_id` FK — **남음 (2G-E-B)**
+   - ~~판매 시작 후 소속 변경 금지를 상태 규칙으로 강제~~
+     → [2G-E-A](TASK-002G-E-A-sale-event-domain.md) §4 에서 **구조적 불변**으로 대체.
+     DB 차원 차단은 **남음**
+   - `seat_inventory` 비정규화 여부 측정 후 결정 — **남음 (2G-E-B)**
 2. **Task 2G-F — 만료 배치 운영 계약** (2G-C §10 의 8가지)
 3. **Task 2G-G — `user_hold_quota` 마이그레이션과 운영 저장소**
 4. **Task 2H — 애플리케이션 서비스와 트랜잭션 경계 소유**
