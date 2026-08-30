@@ -121,7 +121,11 @@ public final class SaleEvent {
     }
 
     /**
-     * 판매를 마감한다. {@code SCHEDULED}(오픈 전 취소)와 {@code OPEN} 에서 가능하다.
+     * 판매를 마감한다. {@link SaleEventStatus#OPEN} 에서만 가능하다.
+     *
+     * <p><b>{@code SCHEDULED} 에서는 닫을 수 없다.</b> 열린 적 없는 회차를 닫는다는 것이
+     * 업무적으로 무엇인지 이 Task 에서 정하지 않았다. 오픈 전 취소가 필요하다면 별도의
+     * 요구사항과 상태 모델 결정을 거쳐야 한다 (TASK-002G-E-A §7 미결정 항목).
      *
      * <p><b>시각을 받지 않는 이유.</b> {@code closesAt} 은 <b>예정</b> 시각일 뿐이고,
      * 매진이나 운영 중단으로 인한 조기 마감은 정상적인 운영 행위다.
@@ -131,7 +135,7 @@ public final class SaleEvent {
      * <p>그래서 {@code closesAt} 은 이 도메인 안에서 <b>판매 기간의 정합성 검증에만</b> 쓰인다.
      * 마감 판정의 근거가 아니다.
      *
-     * @throws SaleEventStateTransitionException 이미 CLOSED 인 경우
+     * @throws SaleEventStateTransitionException OPEN 이 아닌 경우
      */
     public void close() {
         if (!status.isClosable()) {

@@ -217,7 +217,7 @@ graph LR
 
 | 관계 | 계약 | 현재 |
 |---|---|---|
-| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. **소속은 바뀌지 않는다** | 도메인에서 강제. `TrainSchedule` 은 소속을 바꿀 수단이 없다 (모든 필드 final, 변경자 없음). DB 차원 차단은 없다 |
+| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. **소속은 바뀌지 않는다** | 도메인은 **인스턴스 불변**(모든 필드 final)과 **공개 재배정 API 부재**만 보장한다. 같은 `TrainScheduleId` 의 **영속 소속 변경은 아직 막지 못한다** — Task 2G-E-B 의 repository/DB 계약 몫 |
 | `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (현재 `schedule_id`) | `schedule_id` 는 아직 참조 대상 없는 식별자 |
 | (`SaleEvent`, `User`) → `UserHoldQuota` | **I-12 의 범위는 판매 이벤트 단위**다. 같은 회차의 여러 운행편을 합산한다 | 테스트 전용. 운영 테이블 없음 |
 
@@ -225,13 +225,17 @@ graph LR
 
 ```
             open                      close
-SCHEDULED   → OPEN (now >= opensAt)   → CLOSED   (오픈 전 취소)
+SCHEDULED   → OPEN (now >= opensAt)   ✗ 전이 위반
 OPEN        ✗ 전이 위반                → CLOSED
 CLOSED      ✗ 전이 위반                ✗ 전이 위반   ★ 터미널
 ```
 
-`CLOSED` 를 터미널로 둔 이유는 quota 의 의미 때문이다. 종료된 회차의 quota 를 정리한 뒤 다시 열면
-"이 사용자가 이 회차에서 몇 석을 잡고 있었는가" 의 답이 달라진다. 재판매는 새 회차로 한다.
+**허용 2개, 거부 4개.** `CLOSED` 는 터미널이며 나가는 전이가 없다. 재오픈 정책은 요구사항에
+없어 정하지 않았다.
+
+`SCHEDULED → CLOSED` 를 거부하는 이유는 **열린 적 없는 회차를 닫는다는 것의 업무적 의미가
+정해지지 않았기 때문이다.** 허용하면 `CLOSED` 가 정상 마감과 취소를 동시에 뜻하게 된다.
+**오픈 전 취소 정책은 미결정 후속 사항**이며 별도의 요구사항과 상태 모델 결정이 필요하다.
 
 `open` 은 판정 시각을 파라미터로 받고(`now >= opensAt`, DB 의 `opens_at <= NOW(3)` 과 같은 경계),
 `close` 는 받지 않는다 — `closes_at` 은 **예정** 시각일 뿐이고 조기 마감은 정상 운영 행위다.

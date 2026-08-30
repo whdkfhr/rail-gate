@@ -5,17 +5,15 @@ package com.railgate.reservation.saleevent;
  *
  * <pre>
  * SCHEDULED ──open──▶ OPEN ──close──▶ CLOSED
- *     │                                  ▲
- *     └──────────close (회차 취소)────────┘
  * </pre>
  *
- * <p>{@code SCHEDULED → CLOSED} 를 허용하는 이유: 오픈 전에 취소되는 회차가 있다.
- * 이것을 막으면 취소하려고 일단 판매를 여는 우회를 만들게 된다.
+ * <p>이 Task(2G-E-A)가 고정하는 것은 위 두 전이뿐이다. 나머지 조합은 모두 거부된다.
+ * {@code SCHEDULED → CLOSED} 도 마찬가지다 — <b>열린 적 없는 회차를 닫는다는 것이 업무적으로
+ * 무엇인지 정해지지 않았기 때문이다.</b> 오픈 전 취소가 필요하다면 그것은 별도의 요구사항과
+ * 상태 모델 결정을 거쳐야 한다 (TASK-002G-E-A §7 미결정 항목).
  *
- * <p><b>CLOSED 는 터미널이다.</b> 재오픈을 허용하지 않는 이유는 quota 의 의미 때문이다.
- * I-12 의 범위가 판매 회차 단위이므로(TASK-002G-D §4), 종료된 회차의 quota 를 정리한 뒤
- * 다시 열면 "이 사용자가 이 회차에서 몇 석을 잡고 있었는가" 의 답이 달라진다.
- * 재판매가 필요하면 새 회차를 만든다.
+ * <p><b>CLOSED 는 터미널이다.</b> 이 계약에 {@code CLOSED} 에서 나가는 전이는 없다.
+ * 재오픈 정책은 요구사항에 없으며 정하지 않았다.
  */
 public enum SaleEventStatus {
 
@@ -33,8 +31,8 @@ public enum SaleEventStatus {
         return this == SCHEDULED;
     }
 
-    /** 판매를 마감할 수 있는가. 오픈 전 취소도 마감으로 표현한다. */
+    /** 판매를 마감할 수 있는가. 열린 회차만 닫을 수 있다. */
     boolean isClosable() {
-        return this == SCHEDULED || this == OPEN;
+        return this == OPEN;
     }
 }

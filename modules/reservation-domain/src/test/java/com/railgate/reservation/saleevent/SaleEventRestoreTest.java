@@ -107,6 +107,7 @@ class SaleEventRestoreTest {
      *
      * <p>{@link SaleEventRestoreException} 은 {@code IllegalArgumentException} 과 구분된다.
      * 잘못된 사용자 입력이 아니라 <b>저장소에 정합성이 깨진 행이 있다는 신호</b>이기 때문이다.
+     * 운영에서는 서버 측 정합성 오류로 다뤄야 한다. 구체적인 HTTP 매핑은 후속 결정이다.
      */
     @Nested
     @DisplayName("손상된 행")
@@ -148,9 +149,9 @@ class SaleEventRestoreTest {
         /**
          * 복원 실패는 사용자 입력 오류와 다른 예외다.
          *
-         * <p>{@link SaleEvent#schedule} 은 같은 규칙 위반을
-         * {@code IllegalArgumentException}(400) 으로 알리고, 복원은
-         * {@link SaleEventRestoreException}(5xx·알람) 으로 알린다.
+         * <p>{@link SaleEvent#schedule} 은 같은 규칙 위반을 <b>잘못된 입력</b>으로
+         * ({@code IllegalArgumentException}), 복원은 <b>저장된 데이터 손상</b>으로
+         * ({@link SaleEventRestoreException}) 알린다.
          * 규칙은 {@code SaleEventRules} 하나를 공유하지만 대응은 다르다.
          */
         @Test
