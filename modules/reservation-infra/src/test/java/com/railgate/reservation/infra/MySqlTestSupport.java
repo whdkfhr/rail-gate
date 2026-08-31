@@ -141,6 +141,21 @@ public abstract class MySqlTestSupport {
         return dataSource;
     }
 
+    /**
+     * 컨테이너의 JDBC URL. <b>DB 권한 분리를 검증할 때만</b> 쓴다 (Task 2G-E-B1 실험 B).
+     *
+     * <p>운영 경로는 항상 {@link #dataSource()} 의 애플리케이션 계정이다.
+     * 권한 자체가 검증 대상인 실험은 제한된 계정을 따로 만들어야 하므로 URL 이 필요하다.
+     */
+    protected static String jdbcUrl() {
+        return MYSQL.getJdbcUrl();
+    }
+
+    /** 컨테이너 root 비밀번호. 위와 같은 이유로만 쓴다. */
+    protected static String rootPassword() {
+        return MYSQL.getPassword();
+    }
+
     protected static int lockWaitTimeoutSeconds() {
         return LOCK_WAIT_TIMEOUT_SECONDS;
     }

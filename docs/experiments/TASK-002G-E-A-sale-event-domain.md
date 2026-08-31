@@ -244,8 +244,8 @@ UPDATE sale_event SET status='OPEN'
 - **동시 전이** — 두 요청이 같은 회차를 동시에 여는 경우. 도메인 객체는 이것을 막지 않는다(§3)
 - **같은 `TrainScheduleId` 의 영속 소속 변경** — 도메인은 인스턴스 불변과 재배정 API 부재만
   보장한다(§4). **테스트 범위도 아니다**
-- **`seat_inventory` 비정규화 여부** — 2G-D §5 의 미결정 사항 그대로다
-- **`scheduleId → saleEventId` 해석 경로의 비용** — 조인 비용을 측정하지 않았다
+- ~~**`seat_inventory` 비정규화 여부**~~ → [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §8 에서 **정규화 채택**
+- ~~**`scheduleId → saleEventId` 해석 경로의 비용**~~ → [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §7 에서 실측
 - **quota 카운터와의 실제 연결** — `user_hold_quota` 는 여전히 테스트 전용이다
 - 2G-C·2G-D 가 남긴 미검증 항목은 **그대로 남아 있다**
 
@@ -265,23 +265,23 @@ UPDATE sale_event SET status='OPEN'
 | 항목 | 내용 |
 |---|---|
 | **I-12 는 여전히 운영 미구현** | 이 Task 는 quota 범위가 가리킬 모델을 만들었을 뿐이다. 테이블·저장소·서비스가 없다 |
-| **소속 변경의 최종 방어선 부재** | 도메인은 **인스턴스 불변과 공개 재배정 API 부재**만 보장한다. 같은 `TrainScheduleId` 의 영속 소속이 갱신되는 것(`UPDATE train_schedule SET sale_event_id=...`)은 **아직 어디에서도 막히지 않는다** |
+| **소속 변경의 최종 방어선 부재** | 도메인은 **인스턴스 불변과 공개 재배정 API 부재**만 보장한다. 같은 `TrainScheduleId` 의 영속 소속이 갱신되는 것(`UPDATE train_schedule SET sale_event_id=...`)은 **아직 어디에서도 막히지 않는다** *(→ [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §9~§11 이 수단을 비교하고 골랐다. FK 만으로는 막히지 않는다는 것이 실측됐고, 적용은 2G-E-B2 다)* |
 | **`close()` 의 시각 비검증** | 조기 마감을 허용한 대가로, 잘못된 마감을 도메인이 걸러내지 못한다. 권한 검사는 앱 계층 몫이다 |
 | **오픈 전 회차를 끝낼 방법 없음** | `SCHEDULED → CLOSED` 를 거부했으므로, 잘못 등록된 회차는 오픈 시각이 될 때까지 `SCHEDULED` 로 남는다. 취소 정책이 정해지기 전까지의 알려진 공백이다 (§7) |
 | **자동 마감 주체 미정** | `closesAt` 이 지나도 아무도 닫지 않는다. 배치가 필요하며 정해지지 않았다 |
 | **`SaleEventStatus` 와 선점 경로의 연결 없음** | `isOpen()` 을 실제 선점 요청이 검사하도록 배선하는 것은 후속 Task 다 |
-| **비정규화 여부 미결정** | 2G-D §5 그대로. 매 선점마다 `train_schedule` 조인이 필요할 수 있다 |
+| ~~비정규화 여부 미결정~~ | *(→ [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §8 정규화 채택. 조인 비용은 요청당 최대 6행으로 실측됐고 전체 크기와 무관하다)* |
 | **대기열 범위와의 정합** | 2G-D §7 그대로 미결정 |
 
 ---
 
 ## 9. 후속 Task 범위
 
-1. **Task 2G-E-B — 운영 스키마와 저장소**
-   - `sale_event` · `train_schedule` 마이그레이션과 `sale_event_id` FK
-   - **같은 `TrainScheduleId` 의 영속 소속 변경을 막는 repository/DB 계약** (§4 의 세 번째 줄)
-   - 회차 전이의 조건부 UPDATE (`WHERE id=? AND status='SCHEDULED' AND opens_at <= NOW(3)`)
-   - `seat_inventory` 비정규화 여부 측정 후 결정
+1. ~~**Task 2G-E-B — 운영 스키마와 저장소**~~ → 둘로 나뉘었다.
+   - **2G-E-B1 (완료)** — [2G-E-B1](TASK-002G-E-B1-schema-decision.md) : 정규화 채택, 소속 방어 수단 비교와 선택,
+     migration 순서 결정. **실험과 결정만이며 마이그레이션을 적용하지 않았다**
+   - **2G-E-B2 (남음)** — V4·V5·V6 적용, 운영 저장소, 회차 전이의 조건부 UPDATE,
+     테스트 fixture 이행, 트리거 적용 여부 판단
 2. **Task 2G-F — 만료 배치 운영 계약** (2G-C §10 의 8가지)
 3. **Task 2G-G — `user_hold_quota` 마이그레이션과 운영 저장소**
 4. **Task 2H — 애플리케이션 서비스와 트랜잭션 경계 소유**

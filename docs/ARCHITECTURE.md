@@ -217,8 +217,8 @@ graph LR
 
 | 관계 | 계약 | 현재 |
 |---|---|---|
-| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. **소속은 바뀌지 않는다** | 도메인은 **인스턴스 불변**(모든 필드 final)과 **공개 재배정 API 부재**만 보장한다. 같은 `TrainScheduleId` 의 **영속 소속 변경은 아직 막지 못한다** — Task 2G-E-B 의 repository/DB 계약 몫 |
-| `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (현재 `schedule_id`) | `schedule_id` 는 아직 참조 대상 없는 식별자 |
+| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. **소속은 바뀌지 않는다** | 도메인은 **인스턴스 불변**(모든 필드 final)과 **공개 재배정 API 부재**만 보장한다. 같은 `TrainScheduleId` 의 **영속 소속 변경은 아직 막지 못한다** — 수단은 [TASK-002G-E-B1](experiments/TASK-002G-E-B1-schema-decision.md) 이 골랐고 적용은 Task 2G-E-B2 다 |
+| `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (`schedule_id`). **`sale_event_id` 를 비정규화하지 않는다** | `schedule_id` 는 아직 참조 대상 없는 식별자. FK 는 2G-E-B2 |
 | (`SaleEvent`, `User`) → `UserHoldQuota` | **I-12 의 범위는 판매 이벤트 단위**다. 같은 회차의 여러 운행편을 합산한다 | 테스트 전용. 운영 테이블 없음 |
 
 ### 판매 회차 상태 (도메인 구현됨)
@@ -243,6 +243,38 @@ CLOSED      ✗ 전이 위반                ✗ 전이 위반   ★ 터미널
 
 > **도메인 모델은 동시 전이를 막지 않는다.** 운영 방어선은
 > `WHERE id=? AND status='SCHEDULED' AND opens_at <= NOW(3)` 조건부 UPDATE 이며 아직 없다.
+
+### quota 범위 조회 — 정규화 (결정됨, 미적용)
+
+좌석에서 판매 회차를 얻는 경로는 **조인**이다. `seat_inventory` 에 `sale_event_id` 를
+비정규화하지 않는다.
+
+```sql
+SELECT DISTINCT ts.sale_event_id
+  FROM seat_inventory s
+  JOIN train_schedule ts ON ts.id = s.schedule_id
+ WHERE s.id IN (?, ?, ?, ?);   -- 행이 1개가 아니면 회차 교차 요청 → 거부
+```
+
+근거는 [TASK-002G-E-B1](experiments/TASK-002G-E-B1-schema-decision.md) 의 실측이다. 실제 MySQL 8.4 에서 좌석 60,000행 기준, 조인 쪽은
+`eq_ref`/PRIMARY 이고 읽는 행 수는 **요청 좌석 수에 갇힌다**(4석 최악 12행).
+좌석을 400행 → 60,000행 으로 150배 늘려도 읽는 행 수가 늘지 않았다.
+
+> **조인 비용이 0 이라는 뜻이 아니다.** 비정규화 대비 요청당 최대 6행을 더 읽는다.
+> 그 비용이 전체 크기가 아니라 요청 크기에 매여 있어서 받아들인 것이다.
+
+### 소속 변경 방어의 층위 (결정됨, 미적용)
+
+| 층 | 수단 | 상태 | 막는 것 |
+|---|---|---|---|
+| 도메인 | 인스턴스 불변 + 재배정 API 부재 | **구현됨** | 도메인 객체를 통한 변경 |
+| 저장소 | 재배정 UPDATE 미제공 | 2G-E-B2 | 애플리케이션 정상 경로 |
+| DB | `seat_inventory.schedule_id` FK | 2G-E-B2 | 좌석이 있는 운행편의 DELETE |
+| DB | `BEFORE UPDATE` 트리거 | **조건부** — 마이그레이션 계정 분리가 전제다 | `sale_event_id` UPDATE |
+| DB | 컬럼 UPDATE 권한 회수 | **보류** | 위 모두 |
+
+> **FK 만으로는 소속이 불변이 되지 않는다.** FK 는 "유효한 `SaleEvent` 를 참조한다" 만
+> 보장하고, 다른 유효한 회차로의 UPDATE 는 그대로 통과한다 (2G-E-B1 §9 에서 실측).
 
 ### 대기열 입장 범위와 quota 범위 (목표 설계)
 

@@ -157,6 +157,8 @@ user_hold_quota(
 **PK 를 `(sale_event_id, user_id)` 로 두는 이유**는 잠금 키와 정렬 순서를 같게 만들기 위해서다(§6).
 
 `seat_inventory` 에 `sale_event_id` 를 비정규화해 넣을지는 **결정하지 않았다.**
+*(→ [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §8 에서 **정규화 채택**으로 결정됐다. 조인 비용이 요청 좌석 수에 갇혀 있고
+좌석 400행 → 60,000행 에서 읽는 행 수가 늘지 않았다)*
 `train_schedule` 조인 한 번을 줄이는 대신 소속 변경 시 정합성 문제가 생긴다 — 후속 Task 의 판단이다.
 
 ---
@@ -245,7 +247,8 @@ Task 2G-A 가 이미 검증했고**, 이 Task 가 더하는 것은 그 검사가
 ## 9. 운영 마이그레이션을 아직 만들지 않는 이유
 
 1. **`SaleEvent` aggregate 와 `train_schedule` 테이블이 먼저다.** `user_hold_quota` 의 FK 대상이 없다.
-2. **`seat_inventory` 의 `sale_event_id` 비정규화 여부가 미결정**이다 (§5).
+2. ~~**`seat_inventory` 의 `sale_event_id` 비정규화 여부가 미결정**이다 (§5).~~
+   → [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §8 에서 정규화로 결정.
 3. **만료 배치의 운영 계약이 미결정**이다 (2G-C §10) — 배치 원자성, quota 행 누락 처리,
    `held_by` NULL 처리, 사용자별 트랜잭션 분리.
 4. 이 프로젝트는 V1·V2·V3 를 "적용됨, 수정 금지" 로 다룬다. 마이그레이션은 되돌리기 어려운 결정이다.
@@ -268,8 +271,8 @@ Task 2G-A 가 이미 검증했고**, 이 Task 가 더하는 것은 그 검사가
 ### 검증하지 않은 것
 
 - **운영 `SaleEvent` 모델의 동작** — 만들지 않았다
-- **`train_schedule` 조인 비용** — 운행편에서 판매 이벤트를 얻는 경로의 비용을 측정하지 않았다
-- **`seat_inventory` 비정규화 여부**의 트레이드오프
+- ~~**`train_schedule` 조인 비용**~~ → [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §7 에서 실측 (요청당 최대 6행 추가)
+- ~~**`seat_inventory` 비정규화 여부**의 트레이드오프~~ → [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §8 에서 정규화 채택
 - **대기열 이벤트 식별자와 `sale_event_id` 의 동일성** — 방향만 기록했다
 - **판매 이벤트 종료 시 quota 정리 절차**
 - 2G-C 가 남긴 미검증 항목(다중 스위퍼 quota 이중 감소, SQL 수 증가 비용, 전체 deadlock-free,
@@ -284,7 +287,7 @@ Task 2G-A 가 이미 검증했고**, 이 Task 가 더하는 것은 그 검사가
 | **I-12 는 여전히 운영 미구현** | 이 Task 는 범위를 결정했을 뿐이다. 운영 테이블·저장소·서비스가 없다 |
 | **`SaleEvent` 모델 부재** | quota 의 FK 대상이 없어 마이그레이션을 쓸 수 없다 *(→ [2G-E-A](TASK-002G-E-A-sale-event-domain.md) 에서 도메인 모델을 만들었다. 테이블은 여전히 없다)* |
 | **소속 변경 금지의 강제 수단 없음** | 테스트 fixture 는 거부하지만 운영에서는 FK 만으로 막히지 않는다. 판매 시작 후 변경을 막는 상태 규칙이 필요하다 *(→ [2G-E-A](TASK-002G-E-A-sale-event-domain.md) §4 는 상태 규칙을 쓰지 않았다 — 오픈 전 재배정도 안전하지 않기 때문이다. 도메인은 **인스턴스 불변과 공개 재배정 API 부재**만 보장하며, 같은 `train_schedule.id` 의 영속 소속 변경은 **여전히 미해결**이다)* |
-| **비정규화 여부 미결정** | 매 선점마다 `train_schedule` 조인이 필요할 수 있다. 측정하지 않았다 |
+| ~~비정규화 여부 미결정~~ | *(→ [2G-E-B1](TASK-002G-E-B1-schema-decision.md) §8 정규화 채택. 조인은 실제로 필요하며 비용은 요청당 최대 6행으로 실측됐다)* |
 | **대기열 범위와의 정합** | `queue-service` 가 골격 단계라 대기열 쪽 계약 자체가 아직 없다. 두 식별자를 같게 둘지 미결정이며, 어긋나면 "입장은 됐는데 quota 범위가 다른" 상황이 생긴다 |
 | **판매 이벤트 종료 후 정리** | 카운터를 언제 어떻게 비울지 정해지지 않았다 |
 | 2G-C 잔여 위험 | 다중 스위퍼 이중 감소, SQL 수 증가, drift 시 배치 중단 정책, `confirm` 경로 quota 감소, 전체 deadlock-free 미검증 |
@@ -300,7 +303,8 @@ Task 2G-A 가 이미 검증했고**, 이 Task 가 더하는 것은 그 검사가
    - 판매 시작 후 소속 변경 금지 — [2G-E-A](TASK-002G-E-A-sale-event-domain.md) §4 는
      상태 규칙을 기각하고 도메인에서 **인스턴스 불변 + 공개 재배정 API 부재**까지만 보장했다.
      같은 `train_schedule.id` 의 **영속 소속 변경 방지는 남음 (2G-E-B)**
-   - `seat_inventory` 비정규화 여부 측정 후 결정 — **남음 (2G-E-B)**
+   - ~~`seat_inventory` 비정규화 여부 측정 후 결정~~
+     → [2G-E-B1](TASK-002G-E-B1-schema-decision.md) 완료 (정규화 채택)
 2. **Task 2G-F — 만료 배치 운영 계약** (2G-C §10 의 8가지)
 3. **Task 2G-G — `user_hold_quota` 마이그레이션과 운영 저장소**
 4. **Task 2H — 애플리케이션 서비스와 트랜잭션 경계 소유**
