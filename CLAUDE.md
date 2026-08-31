@@ -163,5 +163,9 @@ apps/reservation-service  MVC       ─┼─> modules/reservation-domain ──
 ## 커밋
 
 - Conventional Commits: `feat:`, `fix:`, `test:`, `docs:`, `perf:`, `refactor:`, `chore:`
+- 커밋 제목과 본문은 **한국어로 작성한다.** Conventional Commit 타입, 코드 식별자,
+  명령어와 고유 기술명은 원문을 유지한다. 예: `feat: 판매 회차 조회 저장소 추가`.
 - 불변식에 영향을 주는 변경은 본문에 해당 불변식 ID(`I-8` 등)를 명시한다.
+- 푸시 전후의 변경 요약과 결과 보고, PR 제목과 본문은 **한국어로 작성한다.**
+  브랜치명, 명령어, 파일명, 클래스명과 테스트명은 번역하지 않는다.
 - 커밋/푸시는 사용자가 요청할 때만 한다.

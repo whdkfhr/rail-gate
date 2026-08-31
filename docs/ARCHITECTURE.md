@@ -1,7 +1,8 @@
 # RailGate — 아키텍처
 
-> 상태: 초안 v0.1 (2026-07-28)
-> 관련 문서: [REQUIREMENTS.md](REQUIREMENTS.md), [INVARIANTS.md](INVARIANTS.md)
+> 상태: 초안 v0.2 (2026-08-31)
+> 관련 문서: [REQUIREMENTS.md](REQUIREMENTS.md), [INVARIANTS.md](INVARIANTS.md),
+> [FRONTEND.md](FRONTEND.md)
 
 ---
 
@@ -20,7 +21,7 @@
 ```mermaid
 graph TB
     subgraph Client["클라이언트"]
-        U["사용자 브라우저"]
+        U["web-client<br/>React SPA<br/><i>계획</i>"]
     end
 
     subgraph Edge["엣지"]
@@ -34,7 +35,7 @@ graph TB
     end
 
     subgraph ResTier["Reservation Tier — 저TPS, 트랜잭션"]
-        R1["reservation-service #1<br/>Spring MVC + JPA<br/>:18081"]
+        R1["reservation-service #1<br/>Spring MVC + JDBC<br/>:18081"]
         R2["reservation-service #2"]
         SWEEP["Hold Expiry Sweeper"]
         RECON["Payment Reconciler"]
@@ -110,7 +111,8 @@ rail-gate/
 │   └── experiments/             # 실패 재현 · 벤치마크 기록
 ├── apps/
 │   ├── queue-service/           # WebFlux  :18080
-│   └── reservation-service/     # MVC      :18081
+│   ├── reservation-service/     # MVC      :18081
+│   └── web-client/              # React SPA (계획)
 └── modules/
     ├── common/                  # 에러 · 식별자 · Clock 추상화
     ├── queue-domain/            # 순수 Java. 순번 계산 · 상태 전이
@@ -133,6 +135,7 @@ rail-gate/
 | `modules/queue-redis` | Phase 2 | Lua 스크립트 · 키 전략 · Reactive Redis |
 | `modules/kafka-support` | Phase 4 | Outbox · Inbox · Retry/DLT |
 | `apps/mock-pg` | Phase 1 | 독립 PG 시뮬레이터 컨테이너 |
+| `apps/web-client` | FE-0 | 실제 예매 흐름을 제공하는 React SPA |
 
 > 모듈은 **필요해질 때** 만든다. 미리 만든 빈 모듈은 경계를 강제하지 않고 노이즈만 만든다.
 
@@ -191,6 +194,17 @@ graph LR
 `queue-domain` 을 `queue-redis` 에서 분리하는 이유는 두 가지다.
 Redis 없이 순번 로직을 단위 테스트할 수 있어야 하고,
 Phase 6 에서 대기열을 샤딩할 때 도메인을 건드리지 않고 인프라만 교체하기 위해서다.
+
+### 사용자 웹 경계
+
+`apps/web-client`는 Queue와 Reservation의 공개 HTTP 계약만 소비하는 클라이언트다.
+도메인 불변식을 브라우저에서 다시 구현하거나 좌석 상태를 전역 store에 복제하지 않는다.
+대기열은 SSE와 polling 폴백, 좌석·홀드·결제는 HTTP 조회와 mutation으로 연결한다.
+
+브라우저는 개별 서비스 포트를 알지 않는다. 개발 환경의 Vite proxy와 배포 환경의 Nginx가
+동일 origin의 `/api/queue`, `/api/reservations`를 각각의 서비스로 전달한다. API 구현 전에는
+MSW가 같은 계약의 성공·경합·만료·결제 미확정 응답을 제공한다. 상세 화면과 테스트 계약은
+[FRONTEND.md](FRONTEND.md)를 따른다.
 
 ---
 
@@ -429,8 +443,9 @@ rg:{evt:E1:s0}:waiting ... rg:{evt:E1:s15}:waiting   (16 샤드)
 |---|---|---|
 | **0** | 멀티모듈 골격, Docker Compose, CI | `docker compose up` → health 200 |
 | **1** ★ | 좌석 정합성 코어 (대기열 없이) | T-2/3/4/5 통과, V-1~V-6 전부 0행, 데드락 0건 |
+| **1-W** | 사용자 웹 mock 흐름 (검색·좌석·홀드·결제) | MSW 기반 데스크톱·모바일 전체 흐름, component test 통과 |
 | **2** | Redis 대기열 (Lua, 스케줄러, JWT, SSE) | T-1/T-7 통과, 30분 구동 후 유령 엔트리 0 |
-| **3** ★ | 축소 모델 확정 → k6 → 병목 개선 Before/After | k6 CPU < 90% 인 유효 측정 + 비율 지표 개선 수치 |
+| **3** ★ | 실제 API·Mock PG·웹 연동, 축소 모델 확정 → k6 | Playwright 전체 예매 흐름 + 유효 부하 측정 + 비율 지표 개선 수치 |
 | **4** | Kafka + Outbox/Inbox (토픽 2개로 축소) | T-6 통과, Kafka 중단 중 예매 성공률 무변화 |
 | **5** | 장애 주입 + 취소/재판매 | 8종 장애 전부 검증, 각각 초과 예매 0 |
 | **6** | 확장성 실험 A~D | 4개 벤치마크 보고서 |

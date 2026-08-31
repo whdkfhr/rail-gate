@@ -211,6 +211,8 @@ apps/reservation-service
 새 기능은 다음을 만족해야 완료다.
 
 - 관련 FR/NFR 또는 불변식 ID가 PR/커밋/작업 기록에 남아 있다.
+- 커밋 메시지, 푸시 작업 보고, PR 제목과 본문은 한국어로 작성한다.
+  Conventional Commit 타입과 브랜치명·코드 식별자·명령어는 원문을 유지한다.
 - 도메인 규칙은 순수 단위 테스트가 있다.
 - DB 정합성 규칙은 Testcontainers 통합 테스트가 있다.
 - 동시성 규칙은 `CountDownLatch` 테스트가 있다.

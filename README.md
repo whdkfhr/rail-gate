@@ -9,7 +9,7 @@
 동시성 문제를 재현하고 불변식과 테스트로 설계의 근거를 남기는 데 초점을 둡니다.
 
 > 현재 상태: 좌석 선점, 결제 전이, 만료, 해제의 동시성 코어를 구현했습니다.
-> REST API와 애플리케이션 배선, 대기열, PG 연동은 아직 개발 중입니다.
+> REST API와 애플리케이션 배선, 사용자 웹, 대기열, PG 연동은 아직 개발 중입니다.
 
 ## Why RailGate?
 
@@ -36,6 +36,7 @@ RailGate는 이 문제를 단순 CRUD가 아닌 **불변식 중심 설계**, **D
 | 판매 회차·운행편 도메인 | 진행 중 | `SaleEvent` 상태 전이표(허용 2 / 거부 4)와 `TrainSchedule`의 인스턴스 불변을 순수 도메인으로 구현. **테이블·저장소·영속 소속 변경 방지는 미구현** |
 | 판매 회차 운영 스키마 | 실험 완료 | 정규화 조회를 실제 MySQL 실행 계획으로 확정하고, 소속 변경 방어 수단과 migration 순서를 결정. **V4 migration은 미적용** |
 | 애플리케이션 API | 예정 | 유스케이스, 포트, REST API, 멱등키 저장소 배선 |
+| 사용자 웹 | 설계 완료 | 검색·대기열·좌석·홀드·결제·예매 내역 화면과 상태·테스트 계약 정의. **코드는 미구현** |
 | 대기열·결제·운영 | 예정 | Redis 대기열, 입장 토큰, Mock PG, 관측성, 부하 테스트 |
 
 구현 여부와 목표 설계를 혼동하지 않도록, 아직 코드에 없는 기술과 기능은 로드맵으로
@@ -56,7 +57,12 @@ flowchart LR
     RI["reservation-infra<br/>Spring JDBC repositories"]
     DB[("MySQL 8.4<br/>source of truth")]
     TC["JUnit 5 + Testcontainers<br/>concurrency tests"]
+    WEB["web-client<br/>React SPA (planned)"]
+    EDGE["Nginx<br/>same-origin routing (planned)"]
 
+    WEB --> EDGE
+    EDGE --> QS
+    EDGE --> RS
     QS --> QD
     QS --> QT
     RS --> RD
@@ -211,6 +217,10 @@ Testcontainers로 MySQL 8.4를 실행하며, `CountDownLatch`와 `CyclicBarrier`
 | Testcontainers | 운영 DB와 같은 엔진에서 동시성·트랜잭션 동작 검증 |
 | GitHub Actions | 모든 PR과 `main` 푸시에서 `./gradlew check` 자동 실행 |
 
+사용자 웹은 TypeScript, React, Vite, React Router, TanStack Query를 기본 구성으로 하고
+MSW, Vitest, React Testing Library, Playwright로 상태와 전체 흐름을 검증할 계획입니다.
+선택 근거와 화면별 계약은 [`docs/FRONTEND.md`](docs/FRONTEND.md)에 정리했습니다.
+
 Redis, Kafka, Prometheus, Grafana, k6는 목표 아키텍처에 포함되어 있지만 아직 구현하지
 않았습니다. 필요한 단계에서 실험과 측정 근거를 만든 뒤 도입할 예정입니다.
 
@@ -232,7 +242,8 @@ RailGate는 “부하 테스트에서 우연히 오류가 없었다”를 정합
 rail-gate/
 ├── apps/
 │   ├── queue-service/          # 대기열 애플리케이션 골격
-│   └── reservation-service/    # 예매 애플리케이션 골격
+│   ├── reservation-service/    # 예매 애플리케이션 골격
+│   └── web-client/             # React 사용자 웹 (계획)
 ├── modules/
 │   ├── common/                 # 최소 공용 타입
 │   ├── queue-domain/           # 대기열 도메인 예정
@@ -243,6 +254,7 @@ rail-gate/
     ├── REQUIREMENTS.md         # 기능·비기능 요구사항
     ├── INVARIANTS.md           # 시스템 불변식과 검증 방법
     ├── ARCHITECTURE.md         # 목표 아키텍처와 의존 규칙
+    ├── FRONTEND.md             # 사용자 웹 범위·상태·기술·테스트 계약
     ├── DEVELOPMENT_GUIDE.md    # 개발·테스트 규칙
     └── experiments/            # 작업별 가설과 실험 결과
 ```
@@ -266,15 +278,18 @@ Testcontainers 통합 테스트 때문에 Docker가 필요합니다. 아직 서�
 
 1. 결정된 판매 회차·운행편 스키마의 migration 적용과 사용자별 선점 상한의 세 이탈 경로(확정·만료·해제) 연동
 2. 애플리케이션 서비스와 포트, REST API, 멱등키 저장소 구성
-3. Redis Lua 기반 대기열과 서명된 입장 토큰, SSE 구현
-4. Mock PG의 authorize/capture 흐름과 실패 복구 구현
-5. Prometheus·Grafana 관측성, k6 부하 테스트, 정합성 검증 자동화
-6. 측정 결과에 따라 Kafka Outbox/Inbox와 확장 전략 검토
+3. React 사용자 웹 골격과 MSW 기반 검색·좌석·홀드·결제 화면 구현
+4. Redis Lua 기반 대기열과 서명된 입장 토큰, SSE 및 대기열 화면 연동
+5. Mock PG의 authorize/capture 흐름과 결제 화면·실패 복구 연동
+6. Playwright 전체 예매 E2E와 포트폴리오 스크린샷·시연 자료 구성
+7. Prometheus·Grafana 관측성, k6 부하 테스트, 정합성 검증 자동화
+8. 측정 결과에 따라 Kafka Outbox/Inbox와 확장 전략 검토
 
 ## Documents
 
 - [요구사항](docs/REQUIREMENTS.md)
 - [시스템 불변식](docs/INVARIANTS.md)
 - [아키텍처](docs/ARCHITECTURE.md)
+- [사용자 웹 설계](docs/FRONTEND.md)
 - [개발 가이드](docs/DEVELOPMENT_GUIDE.md)
 - [동시성 실험 기록](docs/experiments)
