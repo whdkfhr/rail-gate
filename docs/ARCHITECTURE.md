@@ -212,27 +212,28 @@ MSW가 같은 계약의 성공·경합·만료·결제 미확정 응답을 제�
 
 > **현재 구현과 목표 구조를 구분한다.** 아래는 [TASK-002G-D](experiments/TASK-002G-D-quota-scope-contract.md)
 > 에서 결정한 **계약**이다. `SaleEvent` 와 `TrainSchedule` 은
-> [TASK-002G-E-A](experiments/TASK-002G-E-A-sale-event-domain.md) 에서 **순수 도메인 모델로만 구현됐다.**
-> **테이블·마이그레이션·저장소는 아직 없다.** 지금 존재하는 테이블은 `seat_inventory`(V1) 하나이고
-> `schedule_id` 는 참조 대상 없는 식별자다. `UserHoldQuota` 는 테스트 전용이다.
+> [TASK-002G-E-A](experiments/TASK-002G-E-A-sale-event-domain.md) 의 도메인 모델에 이어
+> [TASK-002G-E-B2](experiments/TASK-002G-E-B2-sale-event-persistence.md) 에서 **테이블(V4·V5)과 Spring JDBC 저장소까지 구현됐다.**
+> `seat_inventory.schedule_id` 에 외래 키가 붙었다.
+> **`UserHoldQuota` 는 여전히 테스트 전용이며 I-12 는 운영에 구현되지 않았다.**
 
 ```mermaid
 graph LR
-    SE["SaleEvent<br/>판매 회차<br/><i>도메인만 구현</i>"] -->|"1 : N"| TS["TrainSchedule<br/>열차 운행편<br/><i>도메인만 구현</i>"]
-    TS -->|"1 : N"| SI["SeatInventory<br/><b>구현됨 (V1)</b>"]
+    SE["SaleEvent<br/>판매 회차<br/><b>구현됨 (V4)</b>"] -->|"1 : N"| TS["TrainSchedule<br/>열차 운행편<br/><b>구현됨 (V4)</b>"]
+    TS -->|"1 : N (FK, V5)"| SI["SeatInventory<br/><b>구현됨 (V1)</b>"]
     SE --> Q["UserHoldQuota<br/>(saleEventId, userId)<br/><i>미구현</i>"]
     U["User"] --> Q
 
     style SI fill:#2d6a4f,color:#fff
-    style SE fill:#1b4332,color:#fff
-    style TS fill:#1b4332,color:#fff
+    style SE fill:#2d6a4f,color:#fff
+    style TS fill:#2d6a4f,color:#fff
     style Q fill:#495057,color:#fff
 ```
 
 | 관계 | 계약 | 현재 |
 |---|---|---|
-| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. **소속은 바뀌지 않는다** | 도메인은 **인스턴스 불변**(모든 필드 final)과 **공개 재배정 API 부재**만 보장한다. 같은 `TrainScheduleId` 의 **영속 소속 변경은 아직 막지 못한다** — 수단은 [TASK-002G-E-B1](experiments/TASK-002G-E-B1-schema-decision.md) 이 골랐고 적용은 Task 2G-E-B2 다 |
-| `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (`schedule_id`). **`sale_event_id` 를 비정규화하지 않는다** | `schedule_id` 는 아직 참조 대상 없는 식별자. FK 는 2G-E-B2 |
+| `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. **소속은 바뀌지 않는다** | `NOT NULL` + FK 로 "유효한 회차 참조" 를 강제한다. 도메인은 인스턴스 불변, 저장소는 재배정 API 부재. **`sale_event_id` 의 UPDATE 는 여전히 막지 못한다** (아래) |
+| `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (`schedule_id`). **`sale_event_id` 를 비정규화하지 않는다** | V5 의 FK 로 연결됨. 미매핑 좌석 INSERT 와 좌석 있는 운행편 DELETE 를 막는다 |
 | (`SaleEvent`, `User`) → `UserHoldQuota` | **I-12 의 범위는 판매 이벤트 단위**다. 같은 회차의 여러 운행편을 합산한다 | 테스트 전용. 운영 테이블 없음 |
 
 ### 판매 회차 상태 (도메인 구현됨)
@@ -255,40 +256,74 @@ CLOSED      ✗ 전이 위반                ✗ 전이 위반   ★ 터미널
 `close` 는 받지 않는다 — `closes_at` 은 **예정** 시각일 뿐이고 조기 마감은 정상 운영 행위다.
 근거는 [TASK-002G-E-A](experiments/TASK-002G-E-A-sale-event-domain.md) §3 에 있다.
 
-> **도메인 모델은 동시 전이를 막지 않는다.** 운영 방어선은
-> `WHERE id=? AND status='SCHEDULED' AND opens_at <= NOW(3)` 조건부 UPDATE 이며 아직 없다.
-
-### quota 범위 조회 — 정규화 (결정됨, 미적용)
-
-좌석에서 판매 회차를 얻는 경로는 **조인**이다. `seat_inventory` 에 `sale_event_id` 를
-비정규화하지 않는다.
+운영 전이는 조건부 UPDATE 이고 `affected_rows` 로 판정한다 (`JdbcSaleEventRepository`).
 
 ```sql
-SELECT DISTINCT ts.sale_event_id
-  FROM seat_inventory s
-  JOIN train_schedule ts ON ts.id = s.schedule_id
- WHERE s.id IN (?, ?, ?, ?);   -- 행이 1개가 아니면 회차 교차 요청 → 거부
+UPDATE sale_event SET status='OPEN'   WHERE id=? AND status='SCHEDULED' AND opens_at <= NOW(3);
+UPDATE sale_event SET status='CLOSED' WHERE id=? AND status='OPEN';
 ```
 
-근거는 [TASK-002G-E-B1](experiments/TASK-002G-E-B1-schema-decision.md) 의 실측이다. 실제 MySQL 8.4 에서 좌석 60,000행 기준, 조인 쪽은
-`eq_ref`/PRIMARY 이고 읽는 행 수는 **요청 좌석 수에 갇힌다**(4석 최악 12행).
-좌석을 400행 → 60,000행 으로 150배 늘려도 읽는 행 수가 늘지 않았다.
+오픈 판정은 **DB 의 `NOW(3)`** 이 한다 (규칙 7). 그래서 저장소의 `open()` 은 시각 파라미터를
+받지 않는다 — 도메인의 `open(Instant now)` 와 서명이 다른 것은 각 층이 답하는 질문이 다르기
+때문이다. 마감에는 시각 조건이 없다.
+
+> **회차 상태는 아직 좌석 선점을 막지 않는다.** `isOpen()` 을 선점 경로가 검사하도록
+> 배선하는 것은 애플리케이션 서비스의 몫이며 아직 없다.
+
+### quota 범위 조회 — 정규화 조인 (구현됨)
+
+좌석에서 판매 회차를 얻는 경로는 **조인**이다. `seat_inventory` 에 `sale_event_id` 를
+비정규화하지 않는다. 구현은 `JdbcSaleEventScopeRepository` 다.
+
+```sql
+SELECT ts.sale_event_id
+  FROM seat_inventory s
+  STRAIGHT_JOIN train_schedule ts ON ts.id = s.schedule_id
+ WHERE s.id IN (?, ?, ?, ?);
+```
+
+**`DISTINCT` 를 쓰지 않는다.** 요청한 **좌석 하나당 한 행**을 받아 두 가지를 검사한다.
+
+| 검사 | 위반이 뜻하는 것 | 결과 |
+|---|---|---|
+| 행 수 = 요청 좌석 수 | 존재하지 않는 좌석이 섞였다 | 거부 |
+| `sale_event_id` 종류 = 1 | 서로 다른 회차의 좌석이 섞였다 | 거부 |
+
+`DISTINCT` 로 받으면 첫 번째를 검사할 수 없다 — 없는 좌석이 섞여도 남은 좌석의 회차가
+하나로 모이면 통과해 버리고, 호출부는 요청과 다른 집합 위에서 quota 를 계산하게 된다.
+이벤트 간 quota 는 완전히 독립이므로([TASK-002G-D](experiments/TASK-002G-D-quota-scope-contract.md) §4)
+어느 쪽도 아무 회차나 고르는 대체 동작을 두지 않는다.
+
+**`STRAIGHT_JOIN` 으로 조인 순서를 고정한다.** 고정하지 않으면 통계가 최신이 아닐 때
+옵티마이저가 `train_schedule` 을 먼저 훑고 운행편마다 좌석을 따라 들어가, 읽는 행 수가
+**요청 좌석 수가 아니라 전체 좌석 수**에 비례한다 (좌석 600행 실측: 고정 5행 / 미고정 608행).
+정규화를 택한 근거가 "비용이 요청 좌석 수에 갇힌다" 였으므로, 고정하지 않으면 그 근거가
+무너진다. CLAUDE.md 규칙 3 과 같은 문제이며 EXPLAIN 어서션으로 강제한다.
+
+정규화를 택한 근거는 [TASK-002G-E-B1](experiments/TASK-002G-E-B1-schema-decision.md) 의 실측이다.
+실제 MySQL 8.4 에서 좌석 60,000행 기준 조인 쪽은 `eq_ref`/PRIMARY 였고, 좌석을
+400행 → 60,000행 으로 150배 늘려도 읽는 행 수가 늘지 않았다.
 
 > **조인 비용이 0 이라는 뜻이 아니다.** 비정규화 대비 요청당 최대 6행을 더 읽는다.
 > 그 비용이 전체 크기가 아니라 요청 크기에 매여 있어서 받아들인 것이다.
 
-### 소속 변경 방어의 층위 (결정됨, 미적용)
+### 소속 변경 방어의 층위
 
 | 층 | 수단 | 상태 | 막는 것 |
 |---|---|---|---|
 | 도메인 | 인스턴스 불변 + 재배정 API 부재 | **구현됨** | 도메인 객체를 통한 변경 |
-| 저장소 | 재배정 UPDATE 미제공 | 2G-E-B2 | 애플리케이션 정상 경로 |
-| DB | `seat_inventory.schedule_id` FK | 2G-E-B2 | 좌석이 있는 운행편의 DELETE |
-| DB | `BEFORE UPDATE` 트리거 | **조건부** — 마이그레이션 계정 분리가 전제다 | `sale_event_id` UPDATE |
-| DB | 컬럼 UPDATE 권한 회수 | **보류** | 위 모두 |
+| 저장소 | 재배정 UPDATE 미제공 | **구현됨** | 애플리케이션 정상 경로 |
+| DB | `seat_inventory.schedule_id` FK | **구현됨 (V5)** | 미매핑 좌석 INSERT, 좌석 있는 운행편 DELETE |
+| DB | `BEFORE UPDATE` 트리거 | **미적용** — 마이그레이션 계정 분리가 전제다 | — |
+| DB | 컬럼 UPDATE 권한 회수 | **보류** | — |
 
-> **FK 만으로는 소속이 불변이 되지 않는다.** FK 는 "유효한 `SaleEvent` 를 참조한다" 만
-> 보장하고, 다른 유효한 회차로의 UPDATE 는 그대로 통과한다 (2G-E-B1 §9 에서 실측).
+> **★ 도메인과 저장소의 정상 애플리케이션 경로에서는 소속 재배정을 차단하지만,
+> DB 직접 SQL 수준의 `sale_event_id` 변경은 아직 차단하지 못한다.**
+> FK 는 "유효한 `SaleEvent` 를 참조한다" 만 보장하고, 유효한 다른 회차로의
+> `UPDATE train_schedule SET sale_event_id=...` 는 그대로 통과한다
+> (2G-E-B1 §9 에서 실측, [TASK-002G-E-B2](experiments/TASK-002G-E-B2-sale-event-persistence.md) 가 테스트로 고정).
+> 트리거는 바이너리 로깅 환경에서 `CREATE TRIGGER` 가 `SUPER` 를 요구해 애플리케이션 계정으로
+> 도는 Flyway 로 만들 수 없다. 계정 분리가 결정되면 재검토한다.
 
 ### 대기열 입장 범위와 quota 범위 (목표 설계)
 

@@ -107,6 +107,9 @@ SELECT sale_event_id FROM train_schedule WHERE id = ?;
 
 **Q2·Q3 — 정규화**
 
+> 아래는 **이 실험이 실행한 SQL** 이다. 최종 구현은 다르다 — `DISTINCT` 를 빼고
+> `STRAIGHT_JOIN` 을 넣었다 ([2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) §5). 이유는 각각 누락 좌석 탐지와 조인 순서 고정이다.
+
 ```sql
 SELECT DISTINCT ts.sale_event_id
   FROM seat_inventory s
@@ -155,6 +158,11 @@ SELECT s.id, s.sale_event_id, ts.sale_event_id
 
 `EXPLAIN` 의 `rows` 는 옵티마이저의 **추정**이다. 판단 근거는 스토리지 엔진이 실제로 넘긴
 행 수(`Handler_read_*` 세션 카운터)로 잰다. 하드웨어와 무관한 정수다.
+
+> **★ 중요한 단서 ([2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) §5).** 아래 측정은 픽스처가 `ANALYZE TABLE` 을 돌린
+> 직후의 값이다. **통계가 최신이 아니면 옵티마이저가 조인 순서를 뒤집어** 읽는 행 수가
+> 전체 좌석 수에 비례하게 된다 (좌석 600행에서 520~609행 관측).
+> 즉 아래 수치는 **조인 순서를 고정했을 때만** 유지된다. 운영 SQL 은 `STRAIGHT_JOIN` 을 쓴다.
 
 ### 좌석 60,000행 실측
 
@@ -396,15 +404,34 @@ GRANT UPDATE (id, note_seq) ON railgate.train_schedule TO 'app'@'%';  -- sale_ev
 
 ### ✅ 채택 — 선택지 A
 
+**당시(2G-E-B1) 계획한 형태**
+
 ```
 V4  sale_event · train_schedule 생성
-    (train_schedule.sale_event_id → sale_event.id FK 포함)
-
 V5  backfill — 운영자가 등록한 명시적 매핑만 넣는다
-    마이그레이션이 매핑을 만들어내지 않는다
-
 V6  orphan 탐지 → 0행 확인 → seat_inventory.schedule_id FK 추가
 ```
+
+> **★ 정정 — 실제 구현은 이 형태가 아니다 ([2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) §4).**
+>
+> 구현하면서 **backfill 을 마이그레이션 파일로 만들 수 없다**는 것이 드러났다.
+> "이 운행편이 어느 판매 회차에 속하는가" 의 답을 저장소가 갖고 있지 않으므로, 파일이 답을
+> 가지려면 지어내는 수밖에 없고 그것은 아래 §12 가 금지한 지름길과 같다.
+> 그래서 backfill 은 **마이그레이션이 아니라 V4 와 FK 사이의 명시적 운영 단계**가 됐고,
+> **V6 은 만들어지지 않았다.**
+>
+> **최종 구현**
+>
+> ```
+> V4                sale_event · train_schedule 생성                 (자동)
+> ── 운영 단계 ──    운영자가 근거 있는 매핑을 입력                     (수동)
+> V5                orphan 0 검증 → seat_inventory.schedule_id FK 추가 (자동)
+> ```
+>
+> 빈 스키마에서는 `flyway migrate` 가 V4 다음 V5 로 그대로 이어진다(좌석이 없어 orphan 도 없다).
+> **기존 좌석 데이터가 있는 배포에서만** `flyway migrate -target=4` 로 멈춰 매핑을 넣고
+> `flyway migrate` 로 재개한다. 실수로 V5 를 먼저 돌려 실패 이력이 남았다면
+> 원인을 없앤 뒤 `flyway repair` 가 필요하다.
 
 **orphan 탐지 쿼리**
 
@@ -419,7 +446,7 @@ SELECT DISTINCT s.schedule_id
 
 **orphan 이 0행이 아니면 마이그레이션을 실패시킨다.** 조용히 넘어가지 않는다.
 FK 추가가 그 자체로 실패하므로 별도 검사 없이도 실패하지만, **왜 실패했는지를 알 수 있도록**
-V6 은 탐지 쿼리를 먼저 돌리고 결과를 남긴다.
+FK 마이그레이션(구현에서는 V5)은 탐지를 먼저 수행한다.
 
 ### ★ 금지 — 세 지름길은 전부 "통과해버린다"
 
@@ -443,8 +470,9 @@ V6 은 탐지 쿼리를 먼저 돌리고 결과를 남긴다.
 ### 기존 테스트 fixture
 
 `MySqlTestSupport.insertAvailableSeat(scheduleId, seatNo)` 가 임의의 `scheduleId` 를 쓴다.
-V6 이후에는 그 운행편이 존재해야 한다. **fixture 변경을 한 곳에 모으는 것**이 2G-E-B2 의 과제다
-— 헬퍼가 운행편 행을 먼저 보장하게 하면 각 테스트는 그대로 둘 수 있다.
+FK 적용 이후에는 그 운행편이 존재해야 한다. **fixture 변경을 한 곳에 모으는 것**이 2G-E-B2 의
+과제다 — 헬퍼가 운행편 행을 먼저 보장하게 하면 각 테스트는 그대로 둘 수 있다.
+*(→ [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) §9 에서 그렇게 적용했다. 기존 321개 테스트는 수정 없이 통과한다)*
 
 ---
 
@@ -476,10 +504,11 @@ V6 이후에는 그 운행편이 존재해야 한다. **fixture 변경을 한 �
 
 ### 검증하지 않은 것
 
-- **운영 마이그레이션 자체** — V4·V5·V6 을 만들지 않았다
-- **운영 저장소·서비스·API** — 만들지 않았다
-- **실제 `seat_inventory` 에서의 실행 계획** — 실험 사본으로 쟀다.
-  V1 은 컬럼과 인덱스가 더 많아 행 크기와 버퍼 풀 거동이 다르다
+- ~~**운영 마이그레이션 자체**~~ → [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) 에서 V4·V5 로 적용했다 (V6 은 만들지 않았다)
+- ~~**운영 저장소**~~ → [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) 에서 조회·전이·범위 해석 저장소를 만들었다.
+  **애플리케이션 서비스와 API 는 여전히 없다**
+- ~~**실제 `seat_inventory` 에서의 실행 계획**~~ → [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) §5 에서 확인했고,
+  **조인 순서를 고정해야 한다는 사실이 그때 드러났다**
 - **동시 부하에서의 조인 비용** — 단일 세션 실행 계획만 봤다
 - **트리거가 대량 UPDATE·복제에 주는 영향**
 - **마이그레이션 계정 분리의 운영 절차** — 동작만 확인했다
@@ -492,27 +521,35 @@ V6 이후에는 그 운행편이 존재해야 한다. **fixture 변경을 한 �
 
 | 항목 | 내용 |
 |---|---|
-| **I-12 는 여전히 운영 미구현** | 이 Task 는 스키마를 결정했을 뿐이다. 테이블·저장소·서비스가 없다 |
-| **영속 소속 변경은 아직 아무것도 막지 못한다** | 결정만 했고 적용은 2G-E-B2 다 |
+| **I-12 는 여전히 운영에서 강제되지 않는다** | **B1 종료 당시** — 이 Task 는 스키마를 결정했을 뿐이고 테이블·저장소·서비스가 없었다.<br>**[2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) 완료 후 현재** — `sale_event`·`train_schedule`(V4)과 `seat_inventory.schedule_id` FK(V5), 회차·운행편 조회 저장소와 quota 범위 해석 저장소가 구현됐다. 그러나 `user_hold_quota` 테이블, quota 카운터 조건부 UPDATE, 확정·만료·해제 이탈 경로 연동, 애플리케이션 서비스 배선이 없다. **즉 quota 범위를 표현하고 조회하는 스키마와 저장소는 구현됐지만 I-12 자체는 아직 운영에서 강제되지 않는다.** |
+| **DB 직접 SQL 의 소속 변경** | *(→ [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) 에서 도메인·저장소·FK 세 층을 적용했다. **정상 애플리케이션 경로는 차단되지만 DB 직접 SQL 수준의 `sale_event_id` 변경은 여전히 차단하지 못한다** — 트리거 미적용)* |
 | **트리거 적용이 계정 분리에 묶여 있다** | 애플리케이션 계정으로는 생성할 수 없다. 계정 분리를 하지 않으면 (b) 층은 비어 있게 된다 |
 | **DELETE 후 재삽입은 어느 층도 완전히 막지 못한다** | FK 는 좌석이 있을 때만 막는다. 좌석이 없는 운행편은 여전히 열려 있다 |
 | **정규화의 조인 비용은 0 이 아니다** | 요청당 최대 6행을 더 읽는다. 실측으로 문제가 되면 재검토한다 |
-| **기존 테스트 fixture 가 FK 적용 시 깨진다** | V6 이전에 헬퍼를 고쳐야 한다 |
-| **실험 사본과 운영 테이블의 차이** | V1 은 컬럼·인덱스가 더 많다. 계획이 달라질 여지가 있다 |
+| ~~기존 테스트 fixture 가 FK 적용 시 깨진다~~ | *(→ [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) §9 에서 `MySqlTestSupport` 헬퍼 한 곳만 고쳐 해소했다. 기존 321개 테스트는 수정 없이 통과한다)* |
+| **실험 사본과 운영 테이블의 차이** | V1 은 컬럼·인덱스가 더 많다. *(→ [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) §5 에서 확인했다. **계획은 실제로 달라졌고**, 통계가 최신이 아니면 조인 순서가 뒤집혀 `STRAIGHT_JOIN` 으로 고정해야 했다)* |
 | **비정규화 재검토 기준이 없다** | "실측으로 문제가 되면" 의 임계값을 정하지 않았다 |
 
 ---
 
 ## 15. Task 2G-E-B2 적용 범위
 
-1. **V4** — `sale_event` · `train_schedule` 생성 (`sale_event_id` FK 포함)
-2. **V5** — 명시적 매핑 backfill. 암묵 fallback 금지를 마이그레이션에 명시
-3. **V6** — orphan 0 확인 후 `seat_inventory.schedule_id` FK 추가
-4. `MySqlTestSupport` 의 좌석 삽입 헬퍼가 운행편을 먼저 보장하도록 변경
-5. 운영 저장소 — `TrainSchedule` 조회, **재배정 UPDATE 를 제공하지 않음**
-6. 회차 전이의 조건부 UPDATE
-   (`WHERE id=? AND status='SCHEDULED' AND opens_at <= NOW(3)`)
-7. 트리거 적용 여부 — **마이그레이션 계정 분리 결정과 함께** 판단
+> **완료됨 → [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md).** 아래 목록 중 트리거를 제외한 전부가 적용됐다.
+> 적용 과정에서 §12 의 마이그레이션 구조(V5 backfill)와 §7 의 측정 조건(통계 최신)이
+> 정정됐다. 각각 위 §12 와 §7 의 정정 문구를 보라.
+
+| # | 계획한 것 | 실제 |
+|---|---|---|
+| 1 | **V4** — `sale_event` · `train_schedule` 생성 (`sale_event_id` FK 포함) | ✅ 그대로 |
+| 2 | **V5** — 명시적 매핑 backfill | ❌ **마이그레이션으로 만들 수 없었다.** 매핑 원천이 없어 지어내야 하기 때문이다. **V4 와 FK 사이의 수동 운영 단계**가 됐다 |
+| 3 | **V6** — orphan 0 확인 후 `seat_inventory.schedule_id` FK 추가 | ✅ 내용은 그대로, **번호는 V5** (2번이 파일이 아니게 됐으므로). **V6 은 존재하지 않는다** |
+| 4 | `MySqlTestSupport` 헬퍼가 운행편을 먼저 보장 | ✅ 그대로. 기존 321개 테스트 무수정 통과 |
+| 5 | 운영 저장소 — 조회, **재배정 UPDATE 미제공** | ✅ 그대로. 범위 해석 저장소가 추가됐다 |
+| 6 | 회차 전이의 조건부 UPDATE | ✅ 그대로 |
+| 7 | 트리거 적용 여부 판단 | ✅ 판단함 — **적용하지 않는다.** 마이그레이션 계정 분리가 전제다 |
+
+계획에 없었으나 구현 중 드러나 추가된 것: **`STRAIGHT_JOIN` 으로 조인 순서 고정**
+(§7 의 측정 조건 정정), 조회에서 **`DISTINCT` 제거**(누락 좌석 탐지).
 
 ---
 

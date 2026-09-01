@@ -90,9 +90,26 @@ public abstract class MySqlTestSupport {
                 .migrate();
     }
 
+    /**
+     * 테스트 픽스처가 쓰는 판매 회차.
+     *
+     * <p><b>운영 규칙이 아니라 픽스처의 편의다.</b> 별도로 회차를 만들지 않는 테스트의
+     * 운행편은 전부 이 회차에 속한다. 회차별 동작을 검증하는 테스트는 자기 회차를
+     * 직접 INSERT 한다 ({@code JdbcSaleEventScopeRepositoryTest} 처럼).
+     */
+    protected static final long FIXTURE_SALE_EVENT_ID = 9_000_000L;
+
+    /**
+     * V5 의 외래 키 때문에 좌석보다 먼저 지운다.
+     *
+     * <p>{@code train_schedule} 까지 지우는 이유: 테스트마다 다른 {@code scheduleId} 를 쓰고,
+     * 남겨두면 앞 테스트가 만든 소속이 다음 테스트의 quota 범위 해석에 섞인다.
+     */
     @BeforeEach
     void resetSeatInventory() {
         jdbcTemplate.execute("DELETE FROM seat_inventory");
+        jdbcTemplate.execute("DELETE FROM train_schedule");
+        jdbcTemplate.execute("DELETE FROM sale_event");
     }
 
     protected static JdbcTemplate jdbc() {
@@ -164,14 +181,47 @@ public abstract class MySqlTestSupport {
         return POOL_SIZE;
     }
 
-    /** 판매 가능한 좌석 한 개를 넣고 그 id 를 돌려준다. */
+    /**
+     * 판매 가능한 좌석 한 개를 넣고 그 id 를 돌려준다.
+     *
+     * <p>V5 가 {@code seat_inventory.schedule_id → train_schedule.id} 외래 키를 걸었으므로
+     * <b>좌석을 넣기 전에 운행편이 존재해야 한다.</b> 이 헬퍼가 그것을 보장하기 때문에
+     * 각 테스트는 예전처럼 임의의 {@code scheduleId} 를 그대로 쓸 수 있다.
+     *
+     * <p><b>운영 코드는 이런 자동 생성을 하지 않는다.</b> 미매핑 운행편을 조용히 만들어
+     * 붙이는 것은 TASK-002G-E-B1 §12 가 금지한 지름길이다. 여기서 하는 일은
+     * "테스트가 쓰겠다고 선언한 운행편을 준비" 하는 것이지 매핑을 <b>추측</b>하는 것이 아니며,
+     * 그래서 소속도 고정된 {@link #FIXTURE_SALE_EVENT_ID} 하나로만 간다 —
+     * {@code scheduleId} 를 {@code saleEventId} 로 대입하지 않는다.
+     */
     protected static long insertAvailableSeat(long scheduleId, String seatNo) {
+        ensureTrainSchedule(scheduleId);
         jdbc().update(
                 "INSERT INTO seat_inventory (schedule_id, seat_no, status) VALUES (?, ?, 'AVAILABLE')",
                 scheduleId, seatNo);
         return jdbc().queryForObject(
                 "SELECT id FROM seat_inventory WHERE schedule_id = ? AND seat_no = ?",
                 Long.class, scheduleId, seatNo);
+    }
+
+    /**
+     * 이 운행편과 그 소속 회차가 존재하도록 보장한다. 이미 있으면 그대로 둔다.
+     *
+     * <p>{@code ON DUPLICATE KEY UPDATE id = id} 는 값을 바꾸지 않는 no-op 갱신이다.
+     * 이미 다른 회차에 배정된 운행편의 소속을 <b>덮어쓰지 않는다</b> —
+     * 회차별 동작을 검증하는 테스트가 직접 넣은 매핑이 픽스처 때문에 바뀌면 안 된다.
+     */
+    protected static void ensureTrainSchedule(long scheduleId) {
+        jdbc().update("""
+                INSERT INTO sale_event (id, name, opens_at, status)
+                VALUES (?, '테스트 판매 회차', DATE_SUB(NOW(3), INTERVAL 1 DAY), 'OPEN')
+                ON DUPLICATE KEY UPDATE id = id
+                """, FIXTURE_SALE_EVENT_ID);
+        jdbc().update("""
+                INSERT INTO train_schedule (id, sale_event_id)
+                VALUES (?, ?)
+                ON DUPLICATE KEY UPDATE id = id
+                """, scheduleId, FIXTURE_SALE_EVENT_ID);
     }
 
     protected static String statusOf(long seatId) {
