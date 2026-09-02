@@ -2,50 +2,61 @@
 
 [![Gradle Check](https://github.com/whdkfhr/rail-gate/actions/workflows/gradle-check.yml/badge.svg)](https://github.com/whdkfhr/rail-gate/actions/workflows/gradle-check.yml)
 
-명절 기차표 예매처럼 짧은 시간에 요청이 집중되는 환경에서 **공정한 입장**과
-**좌석 정합성**을 어떻게 보장할지 구현하고 검증하는 학습 프로젝트입니다.
+동일 좌석에 다수 요청이 몰릴 때 `SELECT` 후 `UPDATE` 방식이 깨지는 문제를 재현하고,
+조건부 `UPDATE`와 동시성 테스트로 정합성을 검증한 예매 백엔드 프로젝트입니다.
 
 실제 예매 시스템을 우회하거나 자동화하는 도구가 아닙니다. 기능 수를 빠르게 늘리기보다,
 동시성 문제를 재현하고 불변식과 테스트로 설계의 근거를 남기는 데 초점을 둡니다.
 
-> 현재 상태: 좌석 선점, 결제 전이, 만료, 해제의 동시성 코어를 구현했습니다.
-> REST API와 애플리케이션 배선, 사용자 웹, 대기열, PG 연동은 아직 개발 중입니다.
+> 현재 구현 범위는 좌석 도메인, Spring JDBC 저장소, Flyway 스키마와
+> Testcontainers 기반 MySQL 검증까지입니다. 실행 애플리케이션은 골격만 있으며,
+> REST API, 사용자 웹, Redis 대기열, Kafka, PG 연동과 운영 모니터링은 구현하지 않았습니다.
 
 ## Why RailGate?
 
-명절 예매 시스템에는 서로 다른 성격의 문제가 동시에 존재합니다.
+명절 예매 시스템이 풀어야 할 전체 문제는 서로 다른 성격을 가집니다.
 
 - 순간적으로 몰리는 사용자를 순서대로 입장시켜야 합니다.
 - 한 좌석은 아무리 많은 요청이 경쟁해도 한 예약에만 귀속되어야 합니다.
 - 여러 좌석은 일부만 잡히지 않고 전부 성공하거나 전부 실패해야 합니다.
 - 타임아웃, 재시도, 만료 처리가 발생해도 돈과 좌석 상태가 어긋나면 안 됩니다.
 
-RailGate는 이 문제를 단순 CRUD가 아닌 **불변식 중심 설계**, **DB 동시성 제어**,
-**결정적 경합 테스트**로 풀어보며 트레이드오프를 학습하기 위해 시작했습니다.
+RailGate는 이 가운데 좌석 정합성 문제부터 범위를 좁혀, 단순 CRUD가 아닌
+**불변식 중심 설계**, **DB 동시성 제어**, **결정적 경합 테스트**로 실패와 해결책을
+직접 비교하기 위해 시작했습니다. 공정한 입장을 위한 대기열은 후속 범위입니다.
 
 ## Current Scope
 
-| 영역 | 상태 | 현재 구현 |
+### 구현 및 검증 완료
+
+| 영역 | 구현 내용 | 검증 범위 |
 |---|---|---|
-| 좌석 도메인 | 완료 | 순수 Java 상태 머신, 값 객체, 복원 시 불변식 검증 |
-| 단일 좌석 선점·확정 | 완료 | 조건부 `UPDATE`와 `affected_rows` 기반 성공 판정 |
-| 다좌석 선점 | 완료 | 단일 벌크 `UPDATE`, 전부 성공 또는 전부 롤백 |
-| 만료·자발적 해제 | 완료 | stale 후보 격리, 상태와 `hold_id`를 함께 검증하는 CAS |
-| 트랜잭션 경계 | 완료 | 외부 트랜잭션 참여, NESTED savepoint로 저장소 로컬 원자성 보장 |
-| 판매 회차·운행편 도메인 | 완료 | `SaleEvent` 상태 전이(허용 2 / 거부 4), `TrainSchedule`의 인스턴스 불변과 재배정 API 부재 |
-| 판매 회차 운영 스키마·저장소 | 완료 | V4·V5 migration, 회차·운행편 조회, 조건부 상태 전이, quota 범위 해석(`STRAIGHT_JOIN`으로 조인 순서 고정) |
-| 사용자별 선점 상한(I-12) | 실험 중 | **범위를 판매 회차 단위로 결정.** 경쟁 조건·잠금 순서·만료 귀속 실험 완료. **`user_hold_quota` migration과 앱 배선은 미구현** |
-| 애플리케이션 서비스 배선 | 예정 | 회차 상태와 좌석 선점 흐름 연결, quota 범위 해석 → 상한 검사 → 선점 순서 조립 |
-| 애플리케이션 API | 예정 | 유스케이스, 포트, REST API, 멱등키 저장소 배선 |
-| 사용자 웹 | 설계 완료 | 검색·대기열·좌석·홀드·결제·예매 내역 화면과 상태·테스트 계약 정의. **코드는 미구현** |
-| 대기열·결제·운영 | 예정 | Redis 대기열, 입장 토큰, Mock PG, 관측성, 부하 테스트 |
+| 좌석 도메인 | `AVAILABLE → HELD → PAYING → SOLD`, 만료·해제 전이, 값 객체, 복원 시 불변식 검증 | 상태 전이표와 잘못된 복원 조합 단위 테스트 |
+| 단일 좌석 선점·확정 | 상태와 `hold_id`를 검사하는 조건부 `UPDATE`, `affected_rows` 기반 성공 판정 | 순진한 `SELECT` 후 `UPDATE`와 A/B 재현, 동일 좌석 1,000개 동시 요청 |
+| 다좌석 선점 | PK 순서의 단일 벌크 `UPDATE`, 변경 행 수 불일치 시 savepoint 롤백 | 중간 좌석 실패 시 부분 선점이 남지 않는지 검증 |
+| 만료·자발적 해제 | 후보 조회 후 `status`, `hold_id`, `expires_at` 등을 다시 비교하는 CAS | 확정·만료, 재선점·해제 경합과 stale 후보 검증 |
+| 트랜잭션 경계 | 외부 트랜잭션 참여, NESTED savepoint로 저장소 로컬 원자성 보장 | 부분 실패, 외부 커밋·롤백, 잘못된 `DataSource` 배선 검증 |
+| 판매 회차·운행편 | 순수 Java 상태 전이와 복원 규칙, Flyway V4·V5, JDBC 조회·조건부 전이 | 도메인 전이표, migration 호환성, 조회 실행 계획 검증 |
+| DB 통합 테스트 | Testcontainers의 MySQL 8.4에 Flyway migration 적용 | InnoDB 행 잠금, 조건부 갱신, 트랜잭션 경합 검증 |
+
+### 아직 운영 코드로 구현하지 않은 범위
+
+| 영역 | 현재 상태 | 남은 구현 |
+|---|---|---|
+| 사용자별 선점 상한(I-12) | 판매 회차 단위 범위, 잠금 순서, 만료 귀속을 테스트 전용 실험으로 검토 | `user_hold_quota` migration, 좌석 전이와의 트랜잭션 연동, 앱 배선 |
+| 만료 배치 운영 계약 | 사용자 그룹별 실패 격리·재시도·다중 스위퍼·drift 탐지를 테스트 전용 코드로 검토 | 운영 스위퍼, 스케줄러, quota 연동 |
+| 애플리케이션 서비스·API | Spring MVC/WebFlux 실행 모듈만 골격으로 존재 | 유스케이스, 포트, REST API, 멱등키 저장소, JDBC 저장소 배선 |
+| 대기열 | `queue-service`, `queue-domain`, `queue-token` 모듈 골격만 존재 | Redis 대기열, 입장 토큰 발급·검증, SSE |
+| 결제 | 좌석의 `HELD → PAYING → SOLD` 상태 전이만 구현 | 결제 승인 모델, Mock PG, 실제 PG 연동, 실패 복구 |
+| 사용자 웹 | 화면·상태·테스트 계약만 문서화 | React 애플리케이션과 E2E 테스트 |
+| 메시징·관측성 | 도입 전 | Kafka, Prometheus/Grafana, k6 기반 부하·정합성 검증 |
 
 판매 회차 스키마와 저장소는 완료됐지만, 그 위에 올라갈 `user_hold_quota`와 애플리케이션
 서비스가 없어 **I-12(1인당 4석 상한)는 아직 운영에서 강제되지 않습니다.** 운행편의 회차 소속도
 도메인과 저장소의 정상 경로에서는 재배정을 차단하지만 DB 직접 SQL 수준의 변경은 막지 못합니다.
 
-구현 여부와 목표 설계를 혼동하지 않도록, 아직 코드에 없는 기술과 기능은 로드맵으로
-분리합니다. 상세 요구사항과 불변식의 현재 정의는 [`docs`](docs)에서 확인할 수 있습니다.
+현재는 테스트가 주된 실행 진입점이며, 외부에서 호출할 수 있는 예매 API는 아직 없습니다.
+상세 요구사항과 불변식의 현재 정의는 [`docs`](docs)에서 확인할 수 있습니다.
 
 ## Architecture
 
@@ -56,18 +67,13 @@ Gradle 멀티 모듈 구조입니다.
 flowchart LR
     QS["queue-service<br/>WebFlux application skeleton"]
     RS["reservation-service<br/>Spring MVC application skeleton"]
-    QD["queue-domain<br/>planned domain logic"]
-    QT["queue-token<br/>planned admission token"]
+    QD["queue-domain<br/>module skeleton"]
+    QT["queue-token<br/>module skeleton"]
     RD["reservation-domain<br/>seat state machine"]
     RI["reservation-infra<br/>Spring JDBC repositories"]
-    DB[("MySQL 8.4<br/>source of truth")]
-    TC["JUnit 5 + Testcontainers<br/>concurrency tests"]
-    WEB["web-client<br/>React SPA (planned)"]
-    EDGE["Nginx<br/>same-origin routing (planned)"]
+    DB[("MySQL 8.4<br/>Testcontainers")]
+    TC["JUnit 6 + Testcontainers<br/>concurrency tests"]
 
-    WEB --> EDGE
-    EDGE --> QS
-    EDGE --> RS
     QS --> QD
     QS --> QT
     RS --> RD
@@ -80,6 +86,9 @@ flowchart LR
 
 의존 방향은 `apps -> modules`, `infra -> domain`으로 제한합니다. 도메인 모듈에는
 Spring, JPA, JDBC 의존성을 두지 않으며 이 규칙은 Gradle 검증 태스크에서도 검사합니다.
+위 그림은 현재 Gradle 의존성과 통합 테스트 경로만 나타냅니다. `reservation-service`와
+`reservation-infra`는 아직 배선되지 않았으며, 목표 아키텍처는
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)에 별도로 표시했습니다.
 
 ## Engineering Practices
 
@@ -97,7 +106,7 @@ Spring, JPA, JDBC 의존성을 두지 않으며 이 규칙은 Gradle 검증 태�
 
 동시성 테스트도 우연한 타이밍에 기대지 않습니다. `CyclicBarrier`와
 `CountDownLatch`로 실패 인터리빙을 고정하고, 같은 조건에서 순진한 구현은 실패하며
-운영 구현은 통과하는지 비교합니다. 그래서 테스트가 단순 회귀 방지를 넘어
+JDBC 저장소 구현은 통과하는지 비교합니다. 그래서 테스트가 단순 회귀 방지를 넘어
 “현재 방어 코드가 무엇을 막고 있는가”까지 설명하도록 했습니다.
 
 ### DDD: 불변식과 도메인 언어를 코드의 중심에 배치
@@ -138,15 +147,15 @@ Spring, JPA, JDBC 의존성을 두지 않으며 이 규칙은 Gradle 검증 태�
 개발 과정에서 정상 경로만 구현하지 않고, 먼저 깨지는 구현과 위험한 트랜잭션 조합을
 테스트로 만들었습니다.
 
-| 발견한 문제 | 실제로 관측한 결과 | 해결 방법 |
-|---|---|---|
-| `SELECT`로 확인한 뒤 `UPDATE` | 8명이 모두 성공 응답을 받았지만 DB의 실제 보유자는 1명 | 상태 조건을 포함한 단일 `UPDATE`와 `affected_rows`로 판정 |
-| 좌석별 개별 `UPDATE` 반복 | 중간 좌석 경합 시 실패한 요청의 일부 좌석이 `HELD`로 잔류 | 단일 벌크 `UPDATE` 후 요청 수와 변경 행 수가 다르면 롤백 |
-| 조회한 좌석 ID만 믿고 만료·해제 | 조회 후 확정되거나 재선점된 좌석까지 `AVAILABLE`로 되돌릴 수 있음 | `status`, `hold_id`, `expires_at`을 함께 비교하는 CAS로 stale 후보 거부 |
-| 저장소 내부 `setRollbackOnly()` | 외부 트랜잭션 참여 시 정상적인 경합이 커밋 시점의 `UnexpectedRollbackException`으로 변경 | 최상위 경계는 호출자가 소유하고, 저장소 변경만 NESTED savepoint로 롤백한 뒤 전용 예외 전파 |
-| 선점 상한의 범위를 운행편으로 잡음 | 같은 판매 회차인데도 운행편마다 카운터가 분리되어 상한 4석이 6석·8석으로 우회됨 | 범위를 판매 회차(`sale_event_id`) 단위로 확정하고, 도메인 객체와 저장소 모두 공개 재배정 API를 두지 않음. **DB 직접 SQL 수준의 `sale_event_id` 변경 차단은 트리거·권한 회수로 남아 있음** |
-| 외래 키가 있으니 소속도 불변일 것이라 가정 | 존재하는 다른 판매 회차로의 `UPDATE`가 그대로 성공. 이미 쌓인 quota가 어느 회차 것인지 되짚을 수 없게 됨 | 외래 키의 보장 범위를 "유효한 참조"로 한정하고, `UPDATE` 차단은 트리거·권한 회수 등 별도 층으로 분리해 각 층이 막는 것과 못 막는 것을 문서화 |
-| 조인 순서를 옵티마이저에 맡김 | 통계가 최신이 아닐 때 조인 순서가 뒤집혀, 4석 조회가 요청 좌석 수가 아닌 전체 좌석 수에 비례해 608행을 읽음 | `STRAIGHT_JOIN`으로 구동 테이블을 고정하고(5행), 실행 계획을 `EXPLAIN` 어서션으로 강제 |
+| 발견한 문제 | 실제로 관측한 결과 | 대응 | 반영 상태 |
+|---|---|---|---|
+| `SELECT`로 확인한 뒤 `UPDATE` | 8명이 모두 성공 응답을 받았지만 DB의 실제 보유자는 1명 | 상태 조건을 포함한 단일 `UPDATE`와 `affected_rows`로 판정 | 저장소 구현·검증 완료 |
+| 좌석별 개별 `UPDATE` 반복 | 중간 좌석 경합 시 실패한 요청의 일부 좌석이 `HELD`로 잔류 | 단일 벌크 `UPDATE` 후 요청 수와 변경 행 수가 다르면 롤백 | 저장소 구현·검증 완료 |
+| 조회한 좌석 ID만 믿고 만료·해제 | 조회 후 확정되거나 재선점된 좌석까지 `AVAILABLE`로 되돌릴 수 있음 | `status`, `hold_id`, `expires_at`을 함께 비교하는 CAS로 stale 후보 거부 | 저장소 구현·검증 완료 |
+| 저장소 내부 `setRollbackOnly()` | 외부 트랜잭션 참여 시 정상적인 경합이 커밋 시점의 `UnexpectedRollbackException`으로 변경 | 최상위 경계는 호출자가 소유하고, 저장소 변경만 NESTED savepoint로 롤백한 뒤 전용 예외 전파 | 저장소 구현·검증 완료 |
+| 선점 상한의 범위를 운행편으로 잡음 | 같은 판매 회차인데도 운행편마다 카운터가 분리되어 상한 4석이 6석·8석으로 우회됨 | 범위를 판매 회차(`sale_event_id`) 단위로 결정 | 테스트 전용 설계 실험, quota 미구현 |
+| 외래 키가 있으니 소속도 불변일 것이라 가정 | 존재하는 다른 판매 회차로의 `UPDATE`가 성공해 기존 quota의 귀속을 추적할 수 없게 됨 | 외래 키의 보장 범위를 유효한 참조로 한정하고 별도 변경 차단 계층을 검토 | 한계 확인, DB 직접 변경 차단 미구현 |
+| 조인 순서를 옵티마이저에 맡김 | 통계가 최신이 아닐 때 4석 조회가 전체 좌석 수에 비례해 608행을 읽음 | `STRAIGHT_JOIN`으로 구동 테이블을 고정하고 실행 계획을 `EXPLAIN`으로 검사 | 저장소 구현·검증 완료 |
 
 특히 `setRollbackOnly()` 문제는 단독 저장소 테스트에서는 드러나지 않고 외부 트랜잭션에
 참여할 때만 발생했습니다. 호출자가 예외를 트랜잭션 안에서 잡더라도 부분 선점이 남지 않도록
@@ -174,8 +183,8 @@ UPDATE seat_inventory
    AND status = 'AVAILABLE';
 ```
 
-Redis 분산 락이나 애플리케이션 객체의 락에 좌석 정합성을 맡기지 않습니다. MySQL만
-살아 있어도 한 좌석이 두 번 확정되지 않는 구조를 목표로 합니다.
+현재 구현 범위에서는 Redis 분산 락이나 애플리케이션 객체의 락에 좌석 정합성을 맡기지
+않습니다. JDBC 저장소가 MySQL의 조건부 갱신만으로 중복 전이를 막도록 구성했습니다.
 
 ### 2. 다좌석 요청은 단일 벌크 갱신으로 처리
 
@@ -211,36 +220,43 @@ Testcontainers로 MySQL 8.4를 실행하며, `CountDownLatch`와 `CyclicBarrier`
 
 ## Tech Stack
 
-| 기술 | 사용 이유 |
-|---|---|
-| Java 21 | 최신 LTS 기반의 명확한 타입 모델과 안정적인 동시성 도구 사용 |
-| Spring Boot 4.1 | 실행 애플리케이션 구성과 테스트·관측 생태계 활용 |
-| Gradle 9.6.1, Kotlin DSL | 멀티 모듈 경계와 의존성 규칙을 빌드에서 관리 |
-| Spring JDBC | 조건부 SQL과 `affected_rows`, 트랜잭션 경계를 직접 제어 |
-| MySQL 8.4, InnoDB | 행 잠금과 조건부 갱신을 이용한 좌석 정합성 보장 |
-| Flyway | 스키마와 인덱스 변경 이력을 코드와 함께 버전 관리 |
-| JUnit 5, AssertJ | 도메인 규칙과 실패 결과를 읽기 쉬운 테스트로 표현 |
-| Testcontainers | 운영 DB와 같은 엔진에서 동시성·트랜잭션 동작 검증 |
-| GitHub Actions | 모든 PR과 `main` 푸시에서 `./gradlew check` 자동 실행 |
+아래 표는 현재 빌드에서 직접 확인되는 버전과 사용 범위만 적었습니다.
 
-사용자 웹은 TypeScript, React, Vite, React Router, TanStack Query를 기본 구성으로 하고
-MSW, Vitest, React Testing Library, Playwright로 상태와 전체 흐름을 검증할 계획입니다.
-선택 근거와 화면별 계약은 [`docs/FRONTEND.md`](docs/FRONTEND.md)에 정리했습니다.
+| 기술 | 실제 버전·설정 | 현재 사용 범위 |
+|---|---|---|
+| Java | 21 | Gradle toolchain, 도메인 모델과 가상 스레드 기반 경합 테스트 |
+| Spring Boot | **4.1.0** | BOM과 MVC/WebFlux 애플리케이션 골격. 비즈니스 API는 미배선 |
+| Spring JDBC | 7.0.8 | 조건부 SQL, `affected_rows`, 트랜잭션·savepoint 제어 |
+| Gradle | 9.6.1, Kotlin DSL | Wrapper와 멀티 모듈·아키텍처 규칙 관리 |
+| MySQL | 8.4, InnoDB | Testcontainers 통합 테스트의 DB 엔진 |
+| MySQL Connector/J | 9.7.0 | `reservation-infra`의 MySQL 연결 드라이버 |
+| Flyway | 12.4.0 | V1~V5 스키마·인덱스 migration |
+| JUnit Jupiter / AssertJ | 6.0.3 / 3.27.7 | 도메인 단위 테스트와 동시성 결과 검증 |
+| Testcontainers | 2.0.5 | MySQL 컨테이너 수명주기와 통합 테스트 |
+| GitHub Actions | `./gradlew check` | pull request와 `main` push 검증 |
 
-Redis, Kafka, Prometheus, Grafana, k6는 목표 아키텍처에 포함되어 있지만 아직 구현하지
-않았습니다. 필요한 단계에서 실험과 측정 근거를 만든 뒤 도입할 예정입니다.
+Spring JDBC, Connector/J, Flyway, JUnit, AssertJ와 Testcontainers 버전은 Spring Boot
+4.1.0 BOM이 관리합니다. Spring Boot와 Gradle의 단일 출처는 각각
+[`gradle/libs.versions.toml`](gradle/libs.versions.toml)과
+[`gradle-wrapper.properties`](gradle/wrapper/gradle-wrapper.properties)입니다.
 
 ## Verification Strategy
 
 RailGate는 “부하 테스트에서 우연히 오류가 없었다”를 정합성의 증명으로 보지 않습니다.
 각 핵심 불변식은 다음 세 층으로 확인합니다.
 
-1. **구조적 논증**: InnoDB 행 잠금과 조건부 `UPDATE`가 왜 중복 전이를 막는지 설명합니다.
-2. **결정적 검증**: barrier와 latch로 충돌 순서를 만들어 반복 테스트합니다.
-3. **통계적 검증**: 이후 부하 테스트와 사후 정합성 쿼리로 위반 여부를 관찰합니다.
+1. **구조적 논증 — 적용 중**: InnoDB 행 잠금과 조건부 `UPDATE`가 왜 중복 전이를 막는지 설명합니다.
+2. **결정적 검증 — 적용 중**: barrier와 latch로 충돌 순서를 만들고 순진한 구현과 수정 구현을 같은 조건에서 비교합니다.
+3. **통계적 검증 — 예정**: API와 부하 테스트가 준비된 뒤 k6와 사후 정합성 쿼리로 위반 여부를 관찰합니다.
 
 각 작업의 가설, 실패 재현, 선택한 해결책과 남은 위험은
 [`docs/experiments`](docs/experiments)에 기록합니다.
+
+## AI 도구 사용 범위
+
+- AI 도구는 코드 초안, 테스트 케이스 아이디어와 문서 초안을 만드는 보조 수단으로 활용했습니다.
+- 도메인 규칙, 상태 전이 조건, 재현할 실패 케이스와 통과 기준은 프로젝트 작성자가 직접 정의했습니다.
+- AI가 제안한 결과는 빌드, 테스트, 실행 로그와 코드 리뷰 기준으로 검증하고 확인된 내용만 반영했습니다.
 
 ## Project Structure
 
@@ -248,8 +264,7 @@ RailGate는 “부하 테스트에서 우연히 오류가 없었다”를 정합
 rail-gate/
 ├── apps/
 │   ├── queue-service/          # 대기열 애플리케이션 골격
-│   ├── reservation-service/    # 예매 애플리케이션 골격
-│   └── web-client/             # React 사용자 웹 (계획)
+│   └── reservation-service/    # 예매 애플리케이션 골격
 ├── modules/
 │   ├── common/                 # 최소 공용 타입
 │   ├── queue-domain/           # 대기열 도메인 예정
@@ -282,14 +297,15 @@ Testcontainers 통합 테스트 때문에 Docker가 필요합니다. 아직 서�
 
 ## Roadmap
 
+아래 항목은 목표 범위이며 현재 구현 완료 항목에 포함하지 않습니다.
+
 1. 사용자별 선점 상한(`user_hold_quota`)의 운영 구현과 세 이탈 경로(확정·만료·해제) 연동
 2. 애플리케이션 서비스와 포트, REST API, 멱등키 저장소 구성
-3. React 사용자 웹 골격과 MSW 기반 검색·좌석·홀드·결제 화면 구현
-4. Redis Lua 기반 대기열과 서명된 입장 토큰, SSE 및 대기열 화면 연동
-5. Mock PG의 authorize/capture 흐름과 결제 화면·실패 복구 연동
-6. Playwright 전체 예매 E2E와 포트폴리오 스크린샷·시연 자료 구성
-7. Prometheus·Grafana 관측성, k6 부하 테스트, 정합성 검증 자동화
-8. 측정 결과에 따라 Kafka Outbox/Inbox와 확장 전략 검토
+3. Redis Lua 기반 대기열과 서명된 입장 토큰, SSE 구성
+4. React 사용자 웹과 Playwright 예매 E2E 구현
+5. Mock PG로 결제 실패 복구를 검증한 뒤 실제 PG sandbox 연동
+6. Prometheus·Grafana 관측성과 k6 부하·사후 정합성 검증 자동화
+7. 비동기 처리 필요성이 확인되면 Kafka Outbox/Inbox 도입 검토
 
 ## Documents
 
