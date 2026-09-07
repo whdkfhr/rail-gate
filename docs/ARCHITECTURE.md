@@ -325,6 +325,46 @@ SELECT ts.sale_event_id
 > 트리거는 바이너리 로깅 환경에서 `CREATE TRIGGER` 가 `SUPER` 를 요구해 애플리케이션 계정으로
 > 도는 Flyway 로 만들 수 없다. 계정 분리가 결정되면 재검토한다.
 
+### 만료 배치의 운영 계약 (결정됨, 미구현)
+
+만료 회수에 quota 감소를 연동할 때 따라야 할 계약이다. [TASK-002G-F](experiments/TASK-002G-F-expiry-sweeper-operating-contract.md) 가 결정했고
+**스위퍼 배선과 `user_hold_quota` 는 아직 없다.**
+
+| 항목 | 계약 |
+|---|---|
+| 트랜잭션 경계 | `(saleEventId, userId)` **그룹마다 독립 트랜잭션.** 그룹 안에서만 원자적 |
+| 실패 처리 | 실패 그룹만 롤백. **다른 사용자의 회수를 막지 않는다** |
+| 감소량 | 후보 수가 아니라 그 그룹의 `affected_rows` |
+| quota 행 부재·감소 거부 | 그 그룹만 실패. **자동 생성·무시하지 않는다** |
+| 재시도 | 실패한 그룹만, **잠금 실패(1213·1205)만**, 최초 포함 최대 3회 |
+| 다중 스위퍼 | **허용.** 잡 락은 정합성 조건이 아니라 효율 최적화 후보 |
+| `held_by NULL` | 손상 후보로 격리해 보고. **회수·추측·보정하지 않는다** |
+| drift | **읽기 전용 탐지만.** 자동 보정은 기각 |
+| 반환 | `int` 가 아니라 성공·실패 그룹과 손상 후보를 담은 결과 구조체 |
+
+배치 전체를 한 트랜잭션으로 묶으면 **한 사용자의 drift 가 I-10 회수 전체를 멈춘다** —
+사용자 10명·후보 40개에서 한 명의 카운터 행이 없을 때 회수가 40석 중 0석이었다
+(그룹별 트랜잭션은 36석). **SQL 호출 수는 두 대안이 같고 트랜잭션 수만 다르다.**
+
+> 실패 분류는 **cause 사슬의 vendor code(1213·1205)를 예외 클래스보다 우선**한다.
+> vendor code 만이 원인을 특정하기 때문이다 — 1213 은 잠금 순서, 1205 는 잠금 보유 시간의
+> 신호라 고쳐야 할 곳이 다르다. NESTED savepoint 가 1213 을 1305 로 덮기 때문에(2G-B)
+> 최상위 예외만 봐서도 안 된다.
+>
+> vendor code 가 없으면 **아는 만큼만 분류한다.** `SQLTransactionRollbackException` 은
+> "롤백됐다" 까지만, `PessimisticLockingFailureException` 은 "잠금을 얻지 못했다" 까지만
+> 알려 주므로 각각 `TRANSIENT_TRANSACTION_ROLLBACK` · `TRANSIENT_LOCK_FAILURE` 로 따로 센다.
+> 앞을 `DEADLOCK` 으로 세면 데드락 지표가, 뒤를 `LOCK_WAIT_TIMEOUT` 으로 세면 timeout 지표가
+> 부풀려져 **엉뚱한 곳을 고치게 된다.** — **재시도는 하되 지표는 섞지 않는다.**
+
+재시도 계약은 **분류뿐 아니라 실제 루프를 실패 주입으로 검증**했다 —
+2회차 성공 / 3회로 중단(4번째 없음) / 성공한 그룹 재실행 없음 / 재시도마다 새 트랜잭션.
+**최대 3회는 최초 시도를 포함하므로 backoff 는 최대 2회다.**
+
+후보 조회는 운영 저장소와 같은 `FORCE INDEX (idx_seat_inventory_expiry_candidate)` 를 걸어
+filesort 없이 `LIMIT` 이 조기 종료한다 — 전체 좌석이 5배가 돼도 읽는 행 수가 21행으로 같았다.
+`train_schedule` 조인은 `eq_ref`/PRIMARY 다.
+
 ### 대기열 입장 범위와 quota 범위 (목표 설계)
 
 > **현재 `queue-service` 는 골격 단계다.** Spring Boot 애플리케이션 클래스와 컨텍스트 로드 테스트만

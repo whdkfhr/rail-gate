@@ -33,17 +33,21 @@ import javax.sql.DataSource;
  * <p>{@code SHOW SESSION STATUS} 자체도 카운터를 올린다. 그래서 <b>아무것도 하지 않은
  * 구간을 같은 방식으로 한 번 재서 그 값을 빼고</b>, 커넥션 풀이 다른 커넥션을 주지 않도록
  * 세 문장을 <b>하나의 {@link Connection} 에서</b> 실행한다.
+ *
+ * <p>Task 2G-F 의 후보 조회 실행 계획 검증도 이 도구를 쓴다. <b>패키지가 달라 public 이지만
+ * 여전히 테스트 소스 트리에만 있는 테스트 전용 클래스다</b> — 같은 도구를 복사하면
+ * 두 벌이 조용히 갈라진다.
  */
-final class QueryPlanProbe {
+public final class QueryPlanProbe {
 
     /** 한 줄의 {@code EXPLAIN} 결과 중 판단에 쓰는 항목만 남긴다. */
-    record PlanRow(String table, String type, String key, long rowsEstimate, String extra) {
+    public record PlanRow(String table, String type, String key, long rowsEstimate, String extra) {
 
-        boolean isFullScan() {
+        public boolean isFullScan() {
             return "ALL".equals(type);
         }
 
-        boolean usesFilesort() {
+        public boolean usesFilesort() {
             return extra != null && extra.contains("filesort");
         }
 
@@ -56,11 +60,11 @@ final class QueryPlanProbe {
 
     private final DataSource dataSource;
 
-    QueryPlanProbe(DataSource dataSource) {
+    public QueryPlanProbe(DataSource dataSource) {
         this.dataSource = dataSource;
     }
 
-    List<PlanRow> explain(String sql, Object... params) {
+    public List<PlanRow> explain(String sql, Object... params) {
         List<PlanRow> rows = new ArrayList<>();
         try (Connection connection = dataSource.getConnection();
                 PreparedStatement statement = prepare(connection, "EXPLAIN " + sql, params);
@@ -80,7 +84,7 @@ final class QueryPlanProbe {
     }
 
     /** 사람이 읽을 실행 계획. 문서에 그대로 옮기기 위한 것이며 단정에는 쓰지 않는다. */
-    String explainAnalyze(String sql, Object... params) {
+    public String explainAnalyze(String sql, Object... params) {
         StringBuilder text = new StringBuilder();
         try (Connection connection = dataSource.getConnection();
                 PreparedStatement statement = prepare(connection, "EXPLAIN ANALYZE " + sql, params);
@@ -99,7 +103,7 @@ final class QueryPlanProbe {
      *
      * <p>측정 노이즈({@code SHOW SESSION STATUS} 자체의 비용)를 같은 커넥션에서 한 번 재서 뺀다.
      */
-    long rowsRead(String sql, Object... params) {
+    public long rowsRead(String sql, Object... params) {
         try (Connection connection = dataSource.getConnection()) {
             long noise = delta(connection, () -> {
             });

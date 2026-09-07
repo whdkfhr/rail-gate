@@ -342,6 +342,10 @@ SELECT 도 실행하지 못하고, `sweepAndSettle` 의 경우 **경쟁 전이 �
 
 ## 10. Task 2G-D 에서 결정해야 할 운영 계약
 
+> **1번은 [2G-D](TASK-002G-D-quota-scope-contract.md) 가, 나머지 여덟 가지는 [2G-F](TASK-002G-F-expiry-sweeper-operating-contract.md) 가
+> 결정했다.** 결정 내용은 그 문서 §3 의 요약표를 보라.
+> **계약을 정했을 뿐 운영 구현은 여전히 없다** — Task 2G-G·2H 다.
+
 1. **quota scope** — `event_id` vs `schedule_id`. event 모델 도입 여부를 포함한 정책 결정
 2. **`ExpiryCandidate` 확장 vs 반환 타입 변경** — 그룹화를 저장소가 할지 호출자가 할지
 3. **배치 원자성** — 한 사용자의 실패가 배치 전체를 롤백할지, 건너뛰고 알람만 올릴지
@@ -364,11 +368,11 @@ SELECT 도 실행하지 못하고, `sweepAndSettle` 의 경우 **경쟁 전이 �
 | **배치 전체 롤백** | 한 사용자의 quota 감소 실패가 다른 사용자의 좌석 회수까지 되돌린다. I-10(만료 회수)이 지연된다 |
 | **데드락 재시도 미정** | 스위퍼는 배치라 재시도가 자연스럽지만 정책이 없다 |
 | **quota scope 미확정** | 그룹화 키가 바뀌면 이 실험의 그룹 경계도 바뀐다 |
-| **drift 탐지·복구 없음** | `held_seats` 와 실제 활성 좌석을 대조하는 쿼리가 없다 |
-| **`confirm` 경로 quota 감소 부재** | 확정된 좌석 몫이 카운터에 남는다. 만료 경로만으로는 `held_seats` 가 실제 활성 좌석과 일치하지 않는다 — 이번 실험이 그것을 단언하지 않는 이유다 |
-| **`held_by` NULL 행의 발생 원인 미상** | 탐지는 하지만 왜 생기는지는 조사하지 않았다. DB CHECK 로 막을지, 발생 경로를 찾을지 미결정 |
-| **drift 탐지 시 배치 중단** | 한 좌석의 `held_by` NULL 이 전체 만료를 막는다. 운영에서 맞는지 미결정 |
-| **I-12 는 여전히 미구현** | 운영 테이블·저장소·서비스가 없다. 이 실험은 설계 검증이다 |
+| **drift 탐지·복구 없음** | `held_seats` 와 실제 활성 좌석을 대조하는 쿼리가 없다 *(→ [2G-F](TASK-002G-F-expiry-sweeper-operating-contract.md) §10 이 읽기 전용 탐지 쿼리를 만들고 **자동 보정은 기각**했다. 운영 이관은 2G-G)* |
+| **`confirm` 경로 quota 감소 부재** | 확정된 좌석 몫이 카운터에 남는다. 만료 경로만으로는 `held_seats` 가 실제 활성 좌석과 일치하지 않는다 — 이번 실험이 그것을 단언하지 않는 이유다 *(→ [2G-F](TASK-002G-F-expiry-sweeper-operating-contract.md) §10 이 **이것 때문에 drift 자동 보정을 기각했다**. 여전히 미구현)* |
+| **`held_by` NULL 행의 발생 원인 미상** | 탐지는 하지만 왜 생기는지는 조사하지 않았다. DB CHECK 로 막을지, 발생 경로를 찾을지 미결정 *(→ [2G-F](TASK-002G-F-expiry-sweeper-operating-contract.md) §9 도 처리 계약만 정했고 **원인은 여전히 미상**이다)* |
+| ~~drift 탐지 시 배치 중단~~ | *(→ [2G-F](TASK-002G-F-expiry-sweeper-operating-contract.md) §9 가 **손상 후보만 격리**하기로 결정했다. 정상 그룹의 만료를 막지 않는다)* |
+| **I-12 는 여전히 미구현** | 운영 테이블·저장소·서비스가 없다. 이 실험은 설계 검증이다 *(→ 범위를 가리키는 `sale_event`·`train_schedule` 은 [2G-E-B2](TASK-002G-E-B2-sale-event-persistence.md) 가 만들었고 만료 배치 운영 계약은 [2G-F](TASK-002G-F-expiry-sweeper-operating-contract.md) 가 정했다. **`user_hold_quota` 와 상한 강제 로직은 여전히 없다**)* |
 
 ---
 
