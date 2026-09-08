@@ -305,7 +305,7 @@ Task 2G-A 가 이미 검증했고**, 이 Task 가 더하는 것은 그 검사가
      같은 `train_schedule.id` 의 **영속 소속 변경 방지는 남음 (2G-E-B)**
    - ~~`seat_inventory` 비정규화 여부 측정 후 결정~~
      → [2G-E-B1](TASK-002G-E-B1-schema-decision.md) 완료 (정규화 채택)
-2. **Task 2G-F — 만료 배치 운영 계약** (2G-C §10 의 8가지)
+2. ~~**Task 2G-F — 만료 배치 운영 계약** (2G-C §10 의 8가지)~~ → [2G-F](TASK-002G-F-expiry-sweeper-operating-contract.md) 완료 (계약 결정. 운영 구현은 2G-G·2H)
 3. **Task 2G-G — `user_hold_quota` 마이그레이션과 운영 저장소**
 4. **Task 2H — 애플리케이션 서비스와 트랜잭션 경계 소유**
    - `QuotaExceededException` 도입, 429 매핑은 API Task 로

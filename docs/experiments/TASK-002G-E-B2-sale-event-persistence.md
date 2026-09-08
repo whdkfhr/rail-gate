@@ -482,7 +482,8 @@ protected static void ensureTrainSchedule(long scheduleId) {
 
 ## 12. 후속 Task
 
-1. **Task 2G-F — 만료 배치 운영 계약** (2G-C §10 의 8가지)
+1. ~~**Task 2G-F — 만료 배치 운영 계약** (2G-C §10 의 8가지)~~ → [2G-F](TASK-002G-F-expiry-sweeper-operating-contract.md) 완료.
+   8가지 계약을 결정했고 **운영 구현은 하지 않았다**
 2. **Task 2G-G — `user_hold_quota` 마이그레이션과 운영 저장소**
    - 이제 FK 대상(`sale_event`)이 존재한다. B1 §11 이 막혀 있던 이유가 해소됐다
    - PK `(sale_event_id, user_id)`, 카운터 조건부 UPDATE
