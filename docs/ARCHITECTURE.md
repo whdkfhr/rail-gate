@@ -221,20 +221,20 @@ MSW가 같은 계약의 성공·경합·만료·결제 미확정 응답을 제�
 graph LR
     SE["SaleEvent<br/>판매 회차<br/><b>구현됨 (V4)</b>"] -->|"1 : N"| TS["TrainSchedule<br/>열차 운행편<br/><b>구현됨 (V4)</b>"]
     TS -->|"1 : N (FK, V5)"| SI["SeatInventory<br/><b>구현됨 (V1)</b>"]
-    SE --> Q["UserHoldQuota<br/>(saleEventId, userId)<br/><i>미구현</i>"]
+    SE -->|"FK, V6"| Q["UserHoldQuota<br/>(saleEventId, userId)<br/><b>구현됨 (V6)</b><br/><i>배선 없음</i>"]
     U["User"] --> Q
 
     style SI fill:#2d6a4f,color:#fff
     style SE fill:#2d6a4f,color:#fff
     style TS fill:#2d6a4f,color:#fff
-    style Q fill:#495057,color:#fff
+    style Q fill:#40693f,color:#fff
 ```
 
 | 관계 | 계약 | 현재 |
 |---|---|---|
 | `SaleEvent` 1 : N `TrainSchedule` | 하나의 운행편은 **정확히 하나**의 판매 회차에 속한다. **소속은 바뀌지 않는다** | `NOT NULL` + FK 로 "유효한 회차 참조" 를 강제한다. 도메인은 인스턴스 불변, 저장소는 재배정 API 부재. **`sale_event_id` 의 UPDATE 는 여전히 막지 못한다** (아래) |
 | `TrainSchedule` 1 : N `SeatInventory` | 좌석 재고는 운행편을 참조한다 (`schedule_id`). **`sale_event_id` 를 비정규화하지 않는다** | V5 의 FK 로 연결됨. 미매핑 좌석 INSERT 와 좌석 있는 운행편 DELETE 를 막는다 |
-| (`SaleEvent`, `User`) → `UserHoldQuota` | **I-12 의 범위는 판매 이벤트 단위**다. 같은 회차의 여러 운행편을 합산한다 | 테스트 전용. 운영 테이블 없음 |
+| (`SaleEvent`, `User`) → `UserHoldQuota` | **I-12 의 범위는 판매 이벤트 단위**다. 같은 회차의 여러 운행편을 합산한다 | V6 테이블과 조건부 UPDATE 저장소가 있다 ([TASK-002G-G](experiments/TASK-002G-G-user-hold-quota.md)). **요청 경로에 배선되지 않아 아직 강제되지 않는다** |
 
 ### 판매 회차 상태 (도메인 구현됨)
 
@@ -324,6 +324,34 @@ SELECT ts.sale_event_id
 > (2G-E-B1 §9 에서 실측, [TASK-002G-E-B2](experiments/TASK-002G-E-B2-sale-event-persistence.md) 가 테스트로 고정).
 > 트리거는 바이너리 로깅 환경에서 `CREATE TRIGGER` 가 `SUPER` 를 요구해 애플리케이션 계정으로
 > 도는 Flyway 로 만들 수 없다. 계정 분리가 결정되면 재검토한다.
+
+### quota 카운터 (구현됨, 배선 없음)
+
+I-12 는 집계가 아니라 **카운터 행의 조건부 UPDATE** 로 강제한다. 집계로 검사하면
+다른 트랜잭션의 미커밋 홀드가 보이지 않아 같은 사용자의 동시 3석 요청 두 개가 모두
+통과한다 (2G-A 에서 재현, 규칙 8).
+
+```sql
+UPDATE user_hold_quota SET held_seats = held_seats + ?
+ WHERE sale_event_id = ? AND user_id = ? AND held_seats + ? <= 4;
+-- affected_rows = 0 → 상한 초과이거나 행이 없다 (429 로 매핑될 자리)
+```
+
+| 계약 | 내용 |
+|---|---|
+| 트랜잭션 | **호출자가 소유한다.** 이 DataSource 의 트랜잭션 관리자에 `PROPAGATION_MANDATORY` 로 물어 **실제 참여**를 SQL 전에 확인한다 — 다른 DataSource 의 트랜잭션, 동기화 목적으로 바인딩만 된 커넥션(`autoCommit=false` 풀 포함)은 거부 |
+| 잠금 순서 | quota → seat, 키는 `(sale_event_id, user_id)` 오름차순 = PK 순서 |
+| 감소량 | 요청 좌석 수가 아니라 **실제 좌석 변경 행 수** |
+| 없는 행 | **자동 생성하지 않는다.** `lockRow` 가 빈 값으로 알린다 |
+| 최후 방어선 | `CHECK (0 <= held_seats <= 4)` |
+
+> **★ 저장소만으로는 I-12 가 강제되지 않는다.** 선점 유스케이스가 "quota 확보 → 좌석 선점" 을
+> 한 트랜잭션에서 부르도록 배선하고 세 이탈 경로의 감소를 연동해야 한다 — Task 2H 다.
+> 기존 활성 좌석이 있는 배포는 강제를 켜기 전에 [TASK-002G-G](experiments/TASK-002G-G-user-hold-quota.md) §4 의 점검·backfill 을 마쳐야 한다.
+
+drift 는 `load-test/verify/user_hold_quota_drift.sql` 이 **읽기 전용으로** 탐지한다.
+자동 보정은 두지 않았다 — 확정 경로의 감소가 아직 없어 카운터가 "옳게" 클 수 있고,
+그 상태에서 좌석 집계에 맞추면 진짜 문제를 지운다.
 
 ### 만료 배치의 운영 계약 (결정됨, 미구현)
 

@@ -133,6 +133,23 @@ class SaleEventSchemaMigrationTest extends MySqlTestSupport {
                 .repair();
     }
 
+    /**
+     * 지금까지 적용된 마이그레이션 버전.
+     *
+     * <p><b>"마지막 버전이 5" 로 단정하지 않는다.</b> 이 테스트가 확인할 것은
+     * <b>V5(FK 추가)가 적용됐는가</b> 이고, 그 뒤에 V6 이 붙는다고 해서 깨질 이유가 없다.
+     */
+    private List<String> appliedVersions() {
+        return java.util.Arrays.stream(Flyway.configure()
+                        .dataSource(schemaDataSource)
+                        .locations("classpath:db/migration")
+                        .load()
+                        .info()
+                        .applied())
+                .map(info -> info.getVersion().getVersion())
+                .toList();
+    }
+
     private String currentVersion() {
         return Flyway.configure()
                 .dataSource(schemaDataSource)
@@ -199,7 +216,7 @@ class SaleEventSchemaMigrationTest extends MySqlTestSupport {
         void 빈_스키마에서는_끝까지_적용된다() {
             assertThatCode(() -> migrateTo(null)).doesNotThrowAnyException();
 
-            assertThat(currentVersion()).isEqualTo("5");
+            assertThat(appliedVersions()).contains("4", "5");
             assertThat(seatScheduleForeignKeyExists()).isTrue();
         }
 
@@ -318,7 +335,7 @@ class SaleEventSchemaMigrationTest extends MySqlTestSupport {
             assertThat(orphanSchedules()).isEmpty();
             assertThatCode(() -> migrateTo(null)).doesNotThrowAnyException();
 
-            assertThat(currentVersion()).isEqualTo("5");
+            assertThat(appliedVersions()).contains("4", "5");
             assertThat(seatScheduleForeignKeyExists()).isTrue();
             assertThat(seatCount()).isEqualTo(8);
         }
