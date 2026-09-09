@@ -100,14 +100,25 @@ public abstract class MySqlTestSupport {
     protected static final long FIXTURE_SALE_EVENT_ID = 9_000_000L;
 
     /**
-     * V5 의 외래 키 때문에 좌석보다 먼저 지운다.
+     * 외래 키 방향의 <b>역순</b>으로 지운다.
      *
-     * <p>{@code train_schedule} 까지 지우는 이유: 테스트마다 다른 {@code scheduleId} 를 쓰고,
-     * 남겨두면 앞 테스트가 만든 소속이 다음 테스트의 quota 범위 해석에 섞인다.
+     * <pre>
+     *   user_hold_quota ─┐
+     *                    ├─▶ sale_event
+     *   seat_inventory ──▶ train_schedule ─┘
+     * </pre>
+     *
+     * <p>참조하는 쪽(자식)을 먼저 지워야 부모를 지울 수 있다. V5 가
+     * {@code seat_inventory → train_schedule} FK 를, V6 이
+     * {@code user_hold_quota → sale_event} FK 를 걸었다.
+     *
+     * <p>{@code train_schedule} 과 {@code sale_event} 까지 지우는 이유: 테스트마다 다른
+     * 식별자를 쓰고, 남겨두면 앞 테스트가 만든 소속이 다음 테스트의 quota 범위 해석에 섞인다.
      */
     @BeforeEach
     void resetSeatInventory() {
         jdbcTemplate.execute("DELETE FROM seat_inventory");
+        jdbcTemplate.execute("DELETE FROM user_hold_quota");
         jdbcTemplate.execute("DELETE FROM train_schedule");
         jdbcTemplate.execute("DELETE FROM sale_event");
     }

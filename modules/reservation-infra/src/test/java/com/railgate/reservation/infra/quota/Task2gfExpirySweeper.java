@@ -179,10 +179,16 @@ final class Task2gfExpirySweeper {
      * 손상 행은 <b>후보로 읽어서 명시적으로 분리</b>한다 (실험 F).
      *
      * <p><b>{@code FORCE INDEX} 는 운영 {@code JdbcSeatExpiryRepository} 와 같은 의도다.</b>
-     * {@code (expires_at, id)} 인덱스(V2)를 강제하지 않으면 {@code ORDER BY expires_at, id} 가
-     * filesort 가 되고, {@code LIMIT} 이 조기 종료하지 못해 만료 후보 전부를 읽어 정렬한 뒤
-     * 잘라낸다. 그러면 배치 비용이 <b>배치 크기가 아니라 backlog 크기</b>에 비례한다.
-     * 여기에 조인이 붙으면서 옵티마이저의 선택지가 늘어났으므로 강제가 더 필요해졌다.
+     * {@code (expires_at, id)} 인덱스(V2)를 강제하지 않으면 옵티마이저가 다른 계획을 고를 수
+     * 있고, 그중에는 {@code ORDER BY expires_at, id} 를 <b>filesort 로 처리하는 계획도 있다.</b>
+     * 그렇게 되면 {@code LIMIT} 이 조기 종료하지 못해 만료 후보 전부를 읽어 정렬한 뒤 잘라내고,
+     * 배치 비용이 <b>배치 크기가 아니라 backlog 크기</b>에 비례한다.
+     * V2 마이그레이션 주석이 다른 인덱스((status, expires_at))에서 그 비용을 실측했다.
+     *
+     * <p><b>다만 이 SQL 에서 힌트를 뺐을 때 실제로 어떤 계획이 선택되는지는 측정하지 않았다.</b>
+     * "힌트가 없으면 반드시 filesort 가 된다" 고 단정할 근거는 없다. 여기서 강제하는 이유는
+     * 옵티마이저의 선택에 계약을 맡기지 않기 위해서이며(규칙 3), 조인이 붙어 선택지가 늘어난
+     * 만큼 그 필요가 더 커졌다는 판단이다.
      */
     static final String CANDIDATE_INDEX = "idx_seat_inventory_expiry_candidate";
 

@@ -116,14 +116,20 @@
 
 ### I-12. 한 사용자는 동일 판매 이벤트에서 4개를 초과하는 활성 선점을 가질 수 없다
 
-> **현재 상태 — 범위는 운영에 존재하지만 상한 자체는 구현되지 않았다.**
+> **현재 상태 — 저장소는 있지만 요청 경로에 강제되지 않는다.**
 >
-> 있는 것: 범위를 가리키는 `sale_event`·`train_schedule` 테이블(V4)과
-> `seat_inventory.schedule_id` 외래 키(V5), 좌석 목록에서 회차를 얻는 정규화 조인 저장소
-> ([TASK-002G-E-B2](experiments/TASK-002G-E-B2-sale-event-persistence.md)).
+> 있는 것: 범위를 가리키는 `sale_event`·`train_schedule`(V4)과 `seat_inventory.schedule_id`
+> 외래 키(V5), 정규화 조인 저장소
+> ([TASK-002G-E-B2](experiments/TASK-002G-E-B2-sale-event-persistence.md)),
+> **`user_hold_quota` 테이블(V6)과 조건부 UPDATE 저장소, 읽기 전용 drift 탐지 SQL**
+> ([TASK-002G-G](experiments/TASK-002G-G-user-hold-quota.md)).
 >
-> **없는 것: `user_hold_quota` 테이블, 카운터 조건부 UPDATE, 세 이탈 경로(확정·만료·해제)
-> 연동, 애플리케이션 서비스.** 즉 아래의 보장 메커니즘은 아직 어디에서도 실행되지 않는다.
+> **없는 것: 선점 유스케이스 배선, 확정·만료·해제 세 이탈 경로의 감소 연동,
+> 애플리케이션 서비스.** 저장소는 <b>불려졌을 때 원자적</b>일 뿐이고, 부르는 곳이 없다.
+> **아래 보장 메커니즘은 아직 요청 경로에서 실행되지 않는다** — 배선은 Task 2H 다.
+>
+> 기존 활성 좌석이 있는 배포에서는 카운터가 비어 있으므로, 강제를 켜기 전에
+> [TASK-002G-G](experiments/TASK-002G-G-user-hold-quota.md) §4 의 점검·backfill 절차를 마쳐야 한다.
 >
 > 만료 경로의 quota 정산 계약은 [TASK-002G-F](experiments/TASK-002G-F-expiry-sweeper-operating-contract.md) 가 결정했다 — 사용자 그룹별 트랜잭션,
 > 실패 그룹 격리, 잠금 실패만 최대 3회 재시도, 다중 스위퍼 허용, 손상 후보 격리,
