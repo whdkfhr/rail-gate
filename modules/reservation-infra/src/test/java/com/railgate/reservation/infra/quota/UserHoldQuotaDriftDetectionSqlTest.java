@@ -1,5 +1,6 @@
 package com.railgate.reservation.infra.quota;
 
+import com.railgate.reservation.quota.QuotaAcquireOutcome;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.railgate.reservation.HoldId;

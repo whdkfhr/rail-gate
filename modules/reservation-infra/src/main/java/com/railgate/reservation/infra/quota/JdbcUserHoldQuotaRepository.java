@@ -1,6 +1,8 @@
 package com.railgate.reservation.infra.quota;
 
 import com.railgate.reservation.UserId;
+import com.railgate.reservation.quota.QuotaAcquireOutcome;
+import com.railgate.reservation.quota.UserHoldQuotaPort;
 import com.railgate.reservation.saleevent.SaleEventId;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,7 +62,7 @@ import org.springframework.transaction.support.TransactionSynchronizationUtils;
  * <p>확정 경로의 감소는 아직 어디에도 없다 (TASK-002G-C 의 미해결 항목).
  * 따라서 만료 경로만 연동하면 카운터가 실제보다 계속 커진다.
  */
-public class JdbcUserHoldQuotaRepository {
+public class JdbcUserHoldQuotaRepository implements UserHoldQuotaPort {
 
     /** P-2. 1인당 동시 선점 좌석 상한. {@code ck_user_hold_quota_range} 와 같은 값이다. */
     public static final int MAX_SEATS = 4;
@@ -187,6 +189,7 @@ public class JdbcUserHoldQuotaRepository {
      *
      * @throws IllegalStateException 이 DataSource 의 트랜잭션에 참여하지 않은 경우
      */
+    @Override
     public void ensureRow(SaleEventId saleEventId, UserId userId) {
         requireEnlistedTransaction("ensureRow");
         Objects.requireNonNull(saleEventId, "saleEventId");
@@ -204,6 +207,7 @@ public class JdbcUserHoldQuotaRepository {
      * @throws IllegalStateException    이 DataSource 의 트랜잭션에 참여하지 않은 경우
      * @throws IllegalArgumentException {@code seats} 가 범위를 벗어난 경우
      */
+    @Override
     public QuotaAcquireOutcome tryAcquire(SaleEventId saleEventId, UserId userId, int seats) {
         requireEnlistedTransaction("tryAcquire");
         Objects.requireNonNull(saleEventId, "saleEventId");
@@ -355,10 +359,12 @@ public class JdbcUserHoldQuotaRepository {
      * <p>참여 중이면 반환되는 {@link TransactionStatus} 는 <b>새 트랜잭션이 아니다</b>
      * ({@code isNewTransaction() == false}). 그런 상태의 커밋은 DB 커밋이 아니라 정리일 뿐이다.
      *
-     * <p>다만 외부가 이미 rollback-only 로 표시돼 있으면 커밋은
-     * {@code UnexpectedRollbackException} 을 던진다. 그것은 <b>호출자의 계약을 바꾸는 것</b>이라
-     * (TASK-002F 가 다룬 바로 그 문제다) 그 경우에는 롤백으로 정리한다 —
-     * 이미 rollback-only 이므로 상태를 <b>더 나쁘게 만들지 않는다.</b>
+     * <p>외부가 rollback-only 로 표시돼 있을 때의 정리 방식은
+     * {@link #releaseParticipationProbe} 가 결정한다. <b>"rollback-only 이면 커밋이
+     * {@code UnexpectedRollbackException} 을 던진다" 는 무조건 참이 아니다</b> —
+     * global/local 중 어느 쪽이며 {@code failEarlyOnGlobalRollbackOnly} 가 어떻게
+     * 설정됐는지에 따라 갈린다. 측정한 세 경우의 표와 근거는 그 메서드의 문서에 있고,
+     * {@code QuotaTransactionEnlistmentTest} §6 이 고정한다.
      */
     private void requireEnlistedTransaction(String operation) {
         TransactionStatus participation;

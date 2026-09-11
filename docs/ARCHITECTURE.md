@@ -159,12 +159,19 @@ graph LR
     style RI fill:#2d6a4f,color:#fff
 ```
 
-**`reservation-infra` 는 아직 앱에 배선되지 않았다.** 애플리케이션 서비스가 없어 소비자가 없기 때문이다.
-현재는 Testcontainers 테스트가 유일한 소비자이며, 이것이 인프라 어댑터를 앱 기동 없이
-검증할 수 있는 이유이기도 하다.
+**`reservation-infra` 는 [TASK-002H-A](experiments/TASK-002H-A-hold-application-service.md) 에서 앱에 배선됐다.**
+좌석 선점 유스케이스가 소비자다. 다만 그것을 부르는 REST API 는 아직 없으므로,
+실행 진입점은 여전히 테스트다.
 
-배선은 애플리케이션 서비스가 생기는 시점(후속 Task)에 아래 형태가 된다.
-포트 인터페이스도 그때 도메인 쪽으로 추출한다. 구현체가 하나뿐인 인터페이스를 미리 만들지 않는다.
+배선 규칙은 다음과 같다.
+
+- 애플리케이션 서비스는 **도메인 포트에만** 의존한다
+  (`SaleEventScopePort`·`UserHoldQuotaPort`·`SeatHoldPort`, 전부 순수 Java).
+- 포트의 **반환 타입과 예외도 도메인에 둔다.** 그래서 `QuotaAcquireOutcome` 과
+  `SaleEventScopeException` 을 infra 에서 도메인으로 옮겼다 — 복제하지 않고 옮겼다.
+- **구현체를 아는 것은 구성 클래스뿐이다.** 빈 타입도 포트로 노출한다.
+- 포트는 **소비자가 실제로 쓰는 연산만** 갖는다. `UserHoldQuotaPort` 에
+  `release`·`lockAll` 이 없는 이유다.
 
 ```mermaid
 graph LR
@@ -215,7 +222,9 @@ MSW가 같은 계약의 성공·경합·만료·결제 미확정 응답을 제�
 > [TASK-002G-E-A](experiments/TASK-002G-E-A-sale-event-domain.md) 의 도메인 모델에 이어
 > [TASK-002G-E-B2](experiments/TASK-002G-E-B2-sale-event-persistence.md) 에서 **테이블(V4·V5)과 Spring JDBC 저장소까지 구현됐다.**
 > `seat_inventory.schedule_id` 에 외래 키가 붙었다.
-> **`UserHoldQuota` 는 여전히 테스트 전용이며 I-12 는 운영에 구현되지 않았다.**
+> **`UserHoldQuota` 는 V6 테이블과 저장소, 선점 유스케이스 배선까지 구현됐다
+> ([TASK-002H-A](experiments/TASK-002H-A-hold-application-service.md)).
+> 다만 세 이탈 경로의 감소가 없어 I-12 가 요청 경로 전체에 강제된 상태는 아니다.**
 
 ```mermaid
 graph LR
@@ -345,8 +354,11 @@ UPDATE user_hold_quota SET held_seats = held_seats + ?
 | 없는 행 | **자동 생성하지 않는다.** `lockRow` 가 빈 값으로 알린다 |
 | 최후 방어선 | `CHECK (0 <= held_seats <= 4)` |
 
-> **★ 저장소만으로는 I-12 가 강제되지 않는다.** 선점 유스케이스가 "quota 확보 → 좌석 선점" 을
-> 한 트랜잭션에서 부르도록 배선하고 세 이탈 경로의 감소를 연동해야 한다 — Task 2H 다.
+> **★ 선점 경로만 연결됐다.** [TASK-002H-A](experiments/TASK-002H-A-hold-application-service.md) 의
+> `HoldSeatsService` 가 "회차 해석 → quota 확보 → quota 조건부 증가 → 다좌석 원자 선점" 을
+> 한 트랜잭션으로 묶는다. 서비스가 트랜잭션을 소유하고 저장소는 참여만 한다.
+> **그러나 확정·자발적 해제·만료 어느 경로도 quota 를 줄이지 않아 카운터는 한 방향으로만 커진다.**
+> 세 경로를 함께 연동하기 전에는 강제를 켤 수 없다.
 > 기존 활성 좌석이 있는 배포는 강제를 켜기 전에 [TASK-002G-G](experiments/TASK-002G-G-user-hold-quota.md) §4 의 점검·backfill 을 마쳐야 한다.
 
 drift 는 `load-test/verify/user_hold_quota_drift.sql` 이 **읽기 전용으로** 탐지한다.

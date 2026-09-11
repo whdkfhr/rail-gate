@@ -37,7 +37,7 @@ import org.springframework.jdbc.core.RowMapper;
  * <ul>
  *   <li><b>회차 생성·수정 API</b> — 운영자가 등록하는 경로이며 아직 정해지지 않았다.
  *       조회와 전이만 있으면 선점 경로가 동작한다.</li>
- *   <li><b>I-12 quota 연동</b> — {@code user_hold_quota} 테이블 자체가 없다.
+ *   <li><b>I-12 quota 연동</b> — {@code user_hold_quota}(V6)와 저장소는 있지만 이 경로와 연동되지 않았다.
  *       이 클래스는 quota <b>범위를 가리키는 회차</b>를 다룰 뿐 상한을 강제하지 않는다.</li>
  *   <li><b>회차 상태와 선점 경로의 연결</b> — {@code isOpen()} 을 실제 좌석 선점이
  *       검사하도록 배선하는 것은 애플리케이션 서비스의 몫이며 아직 없다.</li>

@@ -1,4 +1,4 @@
-package com.railgate.reservation.infra.saleevent;
+package com.railgate.reservation.saleevent;
 
 /**
  * 좌석 목록에서 quota 범위를 하나로 정할 수 없다.

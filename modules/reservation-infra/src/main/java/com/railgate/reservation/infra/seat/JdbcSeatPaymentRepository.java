@@ -40,7 +40,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *       TASK-002D 에서 검증했다. 주의할 점은 아래 {@code confirm} 의 조건에
  *       {@code expires_at} 이 <b>없다</b>는 것이다. 이미 만료된 PAYING 좌석도 확정되므로
  *       스위퍼와의 경쟁은 예외가 아니라 정상 경로다.</li>
- *   <li><b>I-12</b> 1인당 좌석 상한. {@code user_hold_quota} 테이블 자체가 없다.
+ *   <li><b>I-12</b> 1인당 좌석 상한. {@code user_hold_quota}(V6)와 저장소는 있지만 <b>확정 경로의 감소가 연동되지 않았다.</b>
  *       <b>이 클래스의 확정은 quota 감소가 연동돼야 할 지점 중 하나다.</b>
  *       상태 전이는 구현됐지만 quota 연동은 없다.
  *       (I-9 다좌석 원자성은 {@link JdbcMultiSeatHoldRepository} 가 담당한다)</li>

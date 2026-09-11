@@ -1,6 +1,8 @@
 package com.railgate.reservation.infra.saleevent;
 
 import com.railgate.reservation.saleevent.SaleEventId;
+import com.railgate.reservation.saleevent.SaleEventScopePort;
+import com.railgate.reservation.saleevent.SaleEventScopeException;
 import com.railgate.reservation.seat.SeatId;
 import java.util.List;
 import java.util.Objects;
@@ -46,9 +48,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *
  * <p><b>quota 상한을 검사하지 않는다.</b> 여기서 얻는 것은 "어느 카운터를 볼 것인가" 이고,
  * 그 카운터에 조건부 UPDATE 를 거는 것은 {@code user_hold_quota} 의 몫이다 —
- * <b>그 테이블은 아직 없다. I-12 는 여전히 운영에 구현되지 않았다.</b>
+ * <b>그 테이블(V6)과 저장소, 선점 서비스 배선({@code HoldSeatsService})은 있지만
+ * 확정·해제·만료 세 이탈 경로의 감소는 아직 연동되지 않았다.</b>
  */
-public class JdbcSaleEventScopeRepository {
+public class JdbcSaleEventScopeRepository implements SaleEventScopePort {
 
     /**
      * 한 요청이 담을 수 있는 좌석 수 상한 (REQUIREMENTS.md P-2).
@@ -129,6 +132,7 @@ public class JdbcSaleEventScopeRepository {
      * @throws IllegalArgumentException 목록이 비었거나 {@link #MAX_SEATS_PER_REQUEST} 를 넘는 경우
      * @throws SaleEventScopeException  회차가 하나로 정해지지 않는 경우
      */
+    @Override
     public SaleEventId resolve(List<SeatId> seatIds) {
         Objects.requireNonNull(seatIds, "seatIds");
         if (seatIds.isEmpty()) {
