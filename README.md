@@ -43,17 +43,20 @@ RailGate는 이 가운데 좌석 정합성 문제부터 범위를 좁혀, 단순
 
 | 영역 | 현재 상태 | 남은 구현 |
 |---|---|---|
-| 사용자별 선점 상한(I-12) | `user_hold_quota` migration(V6)과 조건부 `UPDATE` 저장소, 읽기 전용 drift 탐지 SQL | 선점 유스케이스 배선, 확정·만료·해제 감소 연동, 앱 서비스 — **요청 경로에는 아직 강제되지 않음** |
+| 사용자별 선점 상한(I-12) | `user_hold_quota` migration(V6)과 조건부 `UPDATE` 저장소, 읽기 전용 drift 탐지 SQL, **선점 유스케이스 배선**([TASK-002H-A](docs/experiments/TASK-002H-A-hold-application-service.md)) | 확정·만료·해제 세 이탈 경로의 감소 연동, REST API — **선점 경로만 연결됐고 요청 경로 전체에는 아직 강제되지 않음** |
 | 만료 배치 운영 계약 | 사용자 그룹별 실패 격리·재시도·다중 스위퍼·drift 탐지를 테스트 전용 코드로 검토 | 운영 스위퍼, 스케줄러, quota 연동 |
-| 애플리케이션 서비스·API | Spring MVC/WebFlux 실행 모듈만 골격으로 존재 | 유스케이스, 포트, REST API, 멱등키 저장소, JDBC 저장소 배선 |
+| 애플리케이션 서비스·API | 좌석 선점 유스케이스와 도메인 포트 3종, JDBC 저장소 배선 완료 | 확정·해제 유스케이스, REST API, 멱등키 저장소 |
 | 대기열 | `queue-service`, `queue-domain`, `queue-token` 모듈 골격만 존재 | Redis 대기열, 입장 토큰 발급·검증, SSE |
 | 결제 | 좌석의 `HELD → PAYING → SOLD` 상태 전이만 구현 | 결제 승인 모델, Mock PG, 실제 PG 연동, 실패 복구 |
 | 사용자 웹 | 화면·상태·테스트 계약만 문서화 | React 애플리케이션과 E2E 테스트 |
 | 메시징·관측성 | 도입 전 | Kafka, Prometheus/Grafana, k6 기반 부하·정합성 검증 |
 
-판매 회차 스키마와 저장소는 완료됐지만, 그 위에 올라갈 `user_hold_quota`와 애플리케이션
-서비스가 없어 **I-12(1인당 4석 상한)는 아직 운영에서 강제되지 않습니다.** 운행편의 회차 소속도
-도메인과 저장소의 정상 경로에서는 재배정을 차단하지만 DB 직접 SQL 수준의 변경은 막지 못합니다.
+좌석 선점 유스케이스가 `user_hold_quota` 증가와 다좌석 원자 선점을 하나의 트랜잭션으로
+묶습니다. 다만 **확정·자발적 해제·만료 세 이탈 경로 중 어느 것도 quota를 줄이지 않아
+카운터가 한 방향으로만 커집니다.** 따라서 **I-12(1인당 4석 상한)는 요청 경로 전체에
+강제된 상태가 아니며**, 세 경로를 함께 연동하기 전에는 운영에서 켤 수 없습니다.
+운행편의 회차 소속도 도메인과 저장소의 정상 경로에서는 재배정을 차단하지만
+DB 직접 SQL 수준의 변경은 막지 못합니다.
 
 현재는 테스트가 주된 실행 진입점이며, 외부에서 호출할 수 있는 예매 API는 아직 없습니다.
 상세 요구사항과 불변식의 현재 정의는 [`docs`](docs)에서 확인할 수 있습니다.
@@ -86,9 +89,9 @@ flowchart LR
 
 의존 방향은 `apps -> modules`, `infra -> domain`으로 제한합니다. 도메인 모듈에는
 Spring, JPA, JDBC 의존성을 두지 않으며 이 규칙은 Gradle 검증 태스크에서도 검사합니다.
-위 그림은 현재 Gradle 의존성과 통합 테스트 경로만 나타냅니다. `reservation-service`와
-`reservation-infra`는 아직 배선되지 않았으며, 목표 아키텍처는
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)에 별도로 표시했습니다.
+위 그림은 현재 Gradle 의존성과 통합 테스트 경로만 나타냅니다. `reservation-service`는
+`reservation-infra`를 구성 클래스에서만 참조하며, 애플리케이션 서비스는 도메인 포트에만
+의존합니다. 목표 아키텍처는 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)에 별도로 표시했습니다.
 
 ## Engineering Practices
 
@@ -299,8 +302,8 @@ Testcontainers 통합 테스트 때문에 Docker가 필요합니다. 아직 서�
 
 아래 항목은 목표 범위이며 현재 구현 완료 항목에 포함하지 않습니다.
 
-1. 사용자별 선점 상한(`user_hold_quota`)의 운영 구현과 세 이탈 경로(확정·만료·해제) 연동
-2. 애플리케이션 서비스와 포트, REST API, 멱등키 저장소 구성
+1. 세 이탈 경로(확정·만료·해제)의 quota 감소 연동 — 선점 경로는 연결됨
+2. REST API와 멱등키 저장소 구성, 확정·해제 유스케이스
 3. Redis Lua 기반 대기열과 서명된 입장 토큰, SSE 구성
 4. React 사용자 웹과 Playwright 예매 E2E 구현
 5. Mock PG로 결제 실패 복구를 검증한 뒤 실제 PG sandbox 연동

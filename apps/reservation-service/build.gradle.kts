@@ -16,11 +16,29 @@ plugins {
 // ---------------------------------------------------------------------------
 dependencies {
     implementation(project(":modules:reservation-domain"))
+    implementation(project(":modules:reservation-infra"))
     implementation(project(":modules:queue-token"))
 
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
 
-    // 아직 추가하지 않는 것: JPA, MySQL 드라이버, Flyway, Kafka, Testcontainers.
-    // TASK-001 에서 좌석 선점을 구현할 때 추가한다.
+    // Task 2H-A. 선점 유스케이스가 트랜잭션을 소유하므로 앱이 DataSource 와
+    // 트랜잭션 관리자를 구성한다. 저장소는 그 DataSource 를 주입받을 뿐이다.
+    //
+    // JPA 가 아니라 starter-jdbc 인 이유는 reservation-infra 와 같다 —
+    // dirty checking 은 "조건부 UPDATE 한 번" 이라는 요구와 충돌한다.
+    implementation("org.springframework.boot:spring-boot-starter-jdbc")
+    runtimeOnly(libs.mysql.connector)
+
+    // Spring Boot 4 는 자동 구성을 모듈별로 쪼갰다. spring-boot-autoconfigure 에
+    // Flyway 자동 구성이 더 이상 들어 있지 않으므로 명시해야 한다.
+    // 없으면 컨텍스트는 뜨지만 마이그레이션이 조용히 실행되지 않는다 —
+    // 실제로 "Table 'railgate.seat_inventory' doesn't exist" 로 관측했다.
+    runtimeOnly("org.springframework.boot:spring-boot-flyway")
+
+    // 통합 테스트는 실제 MySQL 로만 한다 (CLAUDE.md 규칙 26).
+    testImplementation(libs.testcontainers.mysql)
+    testImplementation(libs.testcontainers.junit)
+
+    // 아직 추가하지 않는 것: JPA, Kafka.
 }

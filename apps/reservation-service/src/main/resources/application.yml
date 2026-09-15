@@ -2,6 +2,23 @@ spring:
   application:
     name: reservation-service
 
+  datasource:
+    hikari:
+      # CLAUDE.md 규칙 9. MySQL 기본값 50초는 경합 시 커넥션 풀을 고갈시킨다 —
+      # 승자가 잠깐 늦어지면 나머지 요청이 전부 50초씩 커넥션을 점유하고
+      # 무관한 좌석 조회까지 실패한다.
+      #
+      # 커넥션 생성 시 한 번만 적용한다. 홀드 경로에서 매번 SET 을 보내면
+      # 요청당 왕복이 하나 늘어난다. MySqlTestSupport 픽스처와 같은 방식이다.
+      connection-init-sql: "SET SESSION innodb_lock_wait_timeout = 3"
+      # MySQL max_connections 기본값 151 을 넘기지 않도록 제한한다.
+      maximum-pool-size: 64
+
+  flyway:
+    # 마이그레이션은 reservation-infra 의 classpath:db/migration 에 있다.
+    # 앱은 위치를 재정의하지 않고 그 모듈의 것을 그대로 쓴다 — 두 벌이 되면 어긋난다.
+    enabled: true
+
 server:
   # 8080/8081 은 개발 머신에서 다른 서비스와 충돌하기 쉬워 18080 대역을 쓴다.
   port: 18081

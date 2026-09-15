@@ -83,7 +83,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *   <li><b>REST API 와 멱등키 저장소</b> — 저장소 수준 구현이다.
  *       <b>FR-2.5 가 완성된 것이 아니다.</b> 앱 배선은 후속이다.</li>
  *   <li><b>I-12</b> quota 감소 — 반환값(해제된 좌석 수)이 그 연동에 쓰일 값이지만
- *       {@code user_hold_quota} 테이블 자체가 없다.</li>
+ *       {@code user_hold_quota}(V6)와 저장소는 있지만 <b>해제 경로의 감소가 연동되지 않았다.</b></li>
  *   <li><b>규칙 32</b> 감사 로그, <b>규칙 35</b> 메트릭.</li>
  * </ul>
  */

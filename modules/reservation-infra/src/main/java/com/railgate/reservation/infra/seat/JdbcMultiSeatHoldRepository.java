@@ -3,6 +3,7 @@ package com.railgate.reservation.infra.seat;
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.hold.SeatCount;
+import com.railgate.reservation.hold.SeatHoldPort;
 import com.railgate.reservation.hold.SeatHoldPolicy;
 import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.seat.SeatUnavailableException;
@@ -130,13 +131,17 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 여러 행을 하나의 트랜잭션에서 갱신하므로 단일 문장 autocommit 경로보다
  * 잠금 범위와 경합 영향이 커질 수 있다. 실제 잠금 보유 시간은 환경과 경합 정도에 따라
  * 달라지며 별도 측정이 필요하다. 아직 측정하지 않았다.
- * <b>이 설정은 이 클래스가 강제할 수 없으며 DataSource 구성의 책임이다.</b>
- * 현재는 테스트 픽스처에만 적용되어 있고 운영 DataSource 는 아직 존재하지 않는다.
+ * <b>이 프로젝트는 그 설정 책임을 {@code DataSource} 구성에 두기로 했다</b> —
+ * 커넥션마다 {@code SET} 을 보내면 요청당 왕복이 하나 늘기 때문에, 커넥션 생성 시
+ * 한 번만 적용하는 편을 택했다. 테스트 픽스처와 앱 모두 Hikari
+ * {@code connection-init-sql} 에 둔다 (TASK-002H-A).
  *
  * <h2>이 클래스가 보장하지 않는 것</h2>
  *
  * <ul>
- *   <li><b>I-12</b> 1인당 좌석 상한 — {@code user_hold_quota} 테이블 자체가 없다.
+ *   <li><b>I-12</b> 1인당 좌석 상한 — {@code user_hold_quota}(V6)와 저장소가 있고
+ *       <b>선점 경로는 {@code HoldSeatsService} 가 이 클래스와 같은 트랜잭션에서 연동한다</b>
+ *       (TASK-002H-A). 다만 아래 세 감소 경로는 여전히 연동되지 않았다.
  *       구현할 때는 이 클래스의 선점 시 증가뿐 아니라, SOLD 확정
  *       ({@link JdbcSeatPaymentRepository})·만료 회수({@link JdbcSeatExpiryRepository})·
  *       자발적 해제에 대응하는 감소를 같은 트랜잭션 경계에서 연동해야 한다.
@@ -148,9 +153,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  * </ul>
  *
  * <p>{@link JdbcSeatHoldRepository} 는 단일 좌석 CAS 검증을 위해 그대로 둔다.
- * 아직 앱에 배선된 것이 없으므로 둘 중 어느 것이 운영 진입점인지는 정해지지 않았다.
+ * <b>앱에 배선된 것은 이 클래스다</b> — {@code SeatHoldPort} 의 구현으로
+ * {@code HoldSeatsService} 가 쓴다 (TASK-002H-A).
  */
-public class JdbcMultiSeatHoldRepository {
+public class JdbcMultiSeatHoldRepository implements SeatHoldPort {
 
     /**
      * 좌석 전부를 한 문장으로 선점한다.
@@ -250,6 +256,7 @@ public class JdbcMultiSeatHoldRepository {
      * <p>즉 부분 갱신 복구는 호출자의 롤백에 의존하지 않는다. 호출자의 롤백은
      * <b>유스케이스 전체</b>의 원자성을 담당하고, savepoint 는 <b>이 저장소의 UPDATE</b> 만 담당한다.
      */
+    @Override
     public void holdAll(List<SeatId> seatIds, HoldId holdId, UserId userId) {
         Objects.requireNonNull(seatIds, "seatIds");
         Objects.requireNonNull(holdId, "holdId");

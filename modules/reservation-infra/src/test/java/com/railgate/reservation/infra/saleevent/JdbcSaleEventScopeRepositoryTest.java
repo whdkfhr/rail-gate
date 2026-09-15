@@ -1,5 +1,6 @@
 package com.railgate.reservation.infra.saleevent;
 
+import com.railgate.reservation.saleevent.SaleEventScopeException;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
