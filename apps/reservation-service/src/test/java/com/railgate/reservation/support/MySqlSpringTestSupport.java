@@ -132,6 +132,21 @@ public abstract class MySqlSpringTestSupport {
                 "SELECT held_by FROM seat_inventory WHERE id = ?", Long.class, seatId);
     }
 
+    protected String holdIdOf(long seatId) {
+        return jdbc.queryForObject(
+                "SELECT hold_id FROM seat_inventory WHERE id = ?", String.class, seatId);
+    }
+
+    protected Long reservationIdOf(long seatId) {
+        return jdbc.queryForObject(
+                "SELECT reservation_id FROM seat_inventory WHERE id = ?", Long.class, seatId);
+    }
+
+    protected java.sql.Timestamp expiresAtOf(long seatId) {
+        return jdbc.queryForObject(
+                "SELECT expires_at FROM seat_inventory WHERE id = ?", java.sql.Timestamp.class, seatId);
+    }
+
     protected long heldSeatCount() {
         return jdbc.queryForObject(
                 "SELECT COUNT(*) FROM seat_inventory WHERE status = 'HELD'", Long.class);

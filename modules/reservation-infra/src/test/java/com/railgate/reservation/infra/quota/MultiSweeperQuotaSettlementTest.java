@@ -1,5 +1,6 @@
 package com.railgate.reservation.infra.quota;
 
+import com.railgate.reservation.hold.SeatConfirmationOutcome;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.railgate.reservation.HoldId;
@@ -358,8 +359,7 @@ class MultiSweeperQuotaSettlementTest extends MySqlTestSupport {
             IntFunction<Runnable> hook = index -> index != 0 ? () -> { } : () ->
                     assertThat(paymentRepository.confirm(sold, HoldId.of(holdId),
                             new com.railgate.reservation.ReservationId(777L)))
-                            .isEqualTo(com.railgate.reservation.infra.seat
-                                    .SeatConfirmationOutcome.CONFIRMED);
+                            .isEqualTo(SeatConfirmationOutcome.CONFIRMED);
 
             List<Task2gfSweepOutcome> outcomes = raceSweepers(2, hook);
 

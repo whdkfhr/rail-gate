@@ -1,10 +1,12 @@
 package com.railgate.reservation.config;
 
+import com.railgate.reservation.hold.SeatConfirmationPort;
 import com.railgate.reservation.hold.SeatHoldPort;
 import com.railgate.reservation.hold.SeatReleasePort;
 import com.railgate.reservation.infra.quota.JdbcUserHoldQuotaRepository;
 import com.railgate.reservation.infra.saleevent.JdbcSaleEventScopeRepository;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
+import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatReleaseRepository;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
 import com.railgate.reservation.saleevent.SaleEventScopePort;
@@ -60,6 +62,9 @@ public class ReservationPersistenceConfig {
     /** 선점 유지 시간 (REQUIREMENTS.md P-4). */
     private static final Duration HOLD_DURATION = Duration.ofMinutes(5);
 
+    /** 결제 유효 시간 (REQUIREMENTS.md P-4). 확정 포트는 쓰지 않지만 저장소 생성자가 요구한다. */
+    private static final Duration PAYMENT_DURATION = Duration.ofMinutes(5);
+
     /**
      * 좌석 트랜잭션 관리자.
      *
@@ -98,5 +103,14 @@ public class ReservationPersistenceConfig {
     @Bean
     public SeatReleasePort seatReleasePort(DataSource dataSource) {
         return new JdbcSeatReleaseRepository(dataSource);
+    }
+
+    /**
+     * 단일 좌석 확정 (Task 2H-C). 포트는 {@code confirm} 만 노출한다 —
+     * {@code startPayment} 는 확정 유스케이스가 쓰지 않으므로 포트에 없다.
+     */
+    @Bean
+    public SeatConfirmationPort seatConfirmationPort(DataSource dataSource) {
+        return new JdbcSeatPaymentRepository(dataSource, PAYMENT_DURATION);
     }
 }

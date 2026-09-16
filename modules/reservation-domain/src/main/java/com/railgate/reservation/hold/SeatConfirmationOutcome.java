@@ -1,4 +1,4 @@
-package com.railgate.reservation.infra.seat;
+package com.railgate.reservation.hold;
 
 /**
  * 좌석 확정({@code PAYING → SOLD}) 시도의 결과.
@@ -6,6 +6,8 @@ package com.railgate.reservation.infra.seat;
  * <p><b>이 결과는 예약이 유효하다는 뜻이 아니다.</b> 좌석 재고 행이 이 예약에 귀속되었다는
  * 사실만 말한다. 결제 승인 검증(I-15)은 {@code payment} 테이블과 PG 연동이 붙어야 성립하며
  * 후속 Task 다.
+ *
+ * <p><b>이 타입은 HTTP 를 모른다.</b> 응답 코드는 API 계층이 결정할 문제이고 그 계층은 아직 없다.
  */
 public enum SeatConfirmationOutcome {
 
@@ -21,9 +23,9 @@ public enum SeatConfirmationOutcome {
      * </ul>
      *
      * <p><b>이미 확정된 좌석에 같은 요청을 다시 보내도 이 값이 돌아온다.</b>
-     * 이는 저장소 CAS 의 결과일 뿐 API 멱등성이 아니다. 재요청에 최초 응답을 그대로
-     * 돌려주는 것은 멱등성 키 인프라의 책임이다 (CLAUDE.md 규칙 17). 여기서 보장하는 것은
-     * "이미 팔린 좌석의 주인이 바뀌지 않는다" 하나다.
+     * 이는 저장소 CAS 의 결과일 뿐 <b>"최초 응답을 재생한 멱등 성공" 이 아니다.</b>
+     * 재요청에 최초 응답을 그대로 돌려주는 것은 멱등성 키 인프라의 책임이다 (CLAUDE.md 규칙 17).
+     * 여기서 보장하는 것은 "이미 팔린 좌석의 주인이 바뀌지 않는다" 하나다.
      */
     NOT_CONFIRMED
 }

@@ -2,6 +2,8 @@ package com.railgate.reservation.saleevent;
 
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
+import com.railgate.reservation.quota.HoldAttribution;
+import com.railgate.reservation.quota.HoldAttributionException;
 import com.railgate.reservation.seat.SeatId;
 import java.util.List;
 import java.util.Optional;
@@ -48,4 +50,22 @@ public interface SaleEventScopePort {
      *                                  비정상 데이터이며 임의 회차를 고르지 않고 쓰기 전에 거절한다
      */
     Optional<SaleEventId> resolveActiveHold(HoldId holdId, UserId userId);
+
+    /**
+     * <b>결제 중인 단일 좌석</b>이 귀속된 사용자와 판매 회차를 해석한다 (확정 경로, Task 2H-C).
+     *
+     * <p>{@code seatId}·{@code holdId}·{@code PAYING} 조건에 맞는 행의 {@code held_by} 와
+     * 운행편의 회차를 읽는다. 확정 UPDATE 가 {@code hold_id}·{@code held_by} 를 지우므로
+     * <b>UPDATE 전에</b> 확보해야 하는 값이다. 클라이언트 값을 받지 않는 이유는
+     * {@link #resolve} 와 같다.
+     *
+     * <p><b>잠금 없는 조회다.</b> 좌석을 먼저 잠그면 quota → seat 순서(TASK-002G-B)가 뒤집힌다.
+     * 결과는 <b>스냅숏</b>이며 최종 확정 여부는 조건부 UPDATE 가 다시 판단한다.
+     *
+     * @return 조건에 맞는 행이 없으면 빈 값 — 확정 경로에서는 {@code NOT_CONFIRMED} 에 해당한다.
+     *         원인(PAYING 아님·다른 홀드·없는 좌석)은 구분되지 않는다
+     * @throws HoldAttributionException 조건에 맞는 행은 있는데 {@code held_by} 가 없는
+     *                                  손상 데이터. 대상 없음과 구분하며 쓰기 전에 거절한다
+     */
+    Optional<HoldAttribution> resolvePayingSeat(SeatId seatId, HoldId holdId);
 }

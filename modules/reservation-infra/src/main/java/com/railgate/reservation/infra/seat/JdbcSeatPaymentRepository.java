@@ -2,6 +2,8 @@ package com.railgate.reservation.infra.seat;
 
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.ReservationId;
+import com.railgate.reservation.hold.SeatConfirmationOutcome;
+import com.railgate.reservation.hold.SeatConfirmationPort;
 import com.railgate.reservation.seat.SeatId;
 import java.time.Duration;
 import java.util.Objects;
@@ -40,14 +42,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *       TASK-002D 에서 검증했다. 주의할 점은 아래 {@code confirm} 의 조건에
  *       {@code expires_at} 이 <b>없다</b>는 것이다. 이미 만료된 PAYING 좌석도 확정되므로
  *       스위퍼와의 경쟁은 예외가 아니라 정상 경로다.</li>
- *   <li><b>I-12</b> 1인당 좌석 상한. {@code user_hold_quota}(V6)와 저장소는 있지만 <b>확정 경로의 감소가 연동되지 않았다.</b>
- *       <b>이 클래스의 확정은 quota 감소가 연동돼야 할 지점 중 하나다.</b>
- *       상태 전이는 구현됐지만 quota 연동은 없다.
+ *   <li><b>I-12</b> 1인당 좌석 상한. 이 클래스가 직접 줄이지 않는다.
+ *       {@code ConfirmSeatService}(Task 2H-C)가 같은 트랜잭션에서 확정 성공 시 1 을 줄인다.
+ *       만료 경로는 여전히 미연동이다.
  *       (I-9 다좌석 원자성은 {@link JdbcMultiSeatHoldRepository} 가 담당한다)</li>
  *   <li>멱등성. 재확정이 0 건인 것은 CAS 결과일 뿐 최초 응답을 돌려주는 것과 다르다.</li>
  * </ul>
  */
-public class JdbcSeatPaymentRepository {
+public class JdbcSeatPaymentRepository implements SeatConfirmationPort {
 
     /**
      * 결제 시작. 검사와 갱신이 한 문장이다.
@@ -147,6 +149,7 @@ public class JdbcSeatPaymentRepository {
      *
      * @return {@link SeatConfirmationOutcome#CONFIRMED} 이면 좌석이 이 예약에 귀속됐다.
      */
+    @Override
     public SeatConfirmationOutcome confirm(
             SeatId seatId, HoldId holdId, ReservationId reservationId) {
         Objects.requireNonNull(seatId, "seatId");

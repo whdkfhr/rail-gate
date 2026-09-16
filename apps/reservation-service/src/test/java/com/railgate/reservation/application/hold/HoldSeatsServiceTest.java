@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.hold.SeatHoldPort;
+import com.railgate.reservation.quota.HoldAttribution;
 import com.railgate.reservation.quota.QuotaAcquireOutcome;
 import com.railgate.reservation.quota.QuotaReleaseOutcome;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
@@ -246,6 +247,11 @@ class HoldSeatsServiceTest {
         @Override
         public Optional<SaleEventId> resolveActiveHold(HoldId holdId, UserId userId) {
             throw new UnsupportedOperationException("선점 경로는 홀드로 해석하지 않는다");
+        }
+
+        @Override
+        public Optional<HoldAttribution> resolvePayingSeat(SeatId seatId, HoldId holdId) {
+            throw new UnsupportedOperationException("이 경로는 결제 중 좌석을 해석하지 않는다");
         }
     }
 

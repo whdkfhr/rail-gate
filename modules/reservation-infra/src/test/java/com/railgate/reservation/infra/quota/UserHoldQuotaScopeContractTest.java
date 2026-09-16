@@ -1,5 +1,6 @@
 package com.railgate.reservation.infra.quota;
 
+import com.railgate.reservation.hold.SeatConfirmationOutcome;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -9,7 +10,6 @@ import com.railgate.reservation.UserId;
 import com.railgate.reservation.infra.MySqlTestSupport;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
-import com.railgate.reservation.infra.seat.SeatConfirmationOutcome;
 import com.railgate.reservation.infra.seat.SeatPaymentOutcome;
 import com.railgate.reservation.seat.SeatId;
 import java.time.Duration;
