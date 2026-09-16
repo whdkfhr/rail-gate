@@ -4,6 +4,8 @@ import com.railgate.reservation.saleevent.SaleEventScopeException;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.railgate.reservation.HoldId;
+import com.railgate.reservation.UserId;
 import com.railgate.reservation.infra.MySqlTestSupport;
 import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.schedule.TrainSchedule;
@@ -381,6 +383,107 @@ class JdbcSaleEventScopeRepositoryTest extends MySqlTestSupport {
                     """);
 
             assertThat(columns).isEmpty();
+        }
+    }
+
+    /**
+     * ★ Task 2H-B — 활성 홀드로부터 회차를 해석한다.
+     *
+     * <p>해제 요청은 좌석 목록을 담지 않으므로 {@code holdId}·{@code userId} 에 맞는
+     * 활성 좌석에서 서버가 회차를 정한다. 잠금 없는 조회이며 결과는 스냅숏이다.
+     */
+    @Nested
+    @DisplayName("★ 활성 홀드의 quota 범위 해석 (Task 2H-B)")
+    class 활성_홀드_범위_해석 {
+
+        private static final UserId OWNER = new UserId(77L);
+        private static final UserId STRANGER = new UserId(88L);
+
+        /** 좌석을 이 홀드·사용자의 HELD 상태로 만든다. 선점 경로를 거치지 않는 픽스처다. */
+        private void hold(SeatId seatId, HoldId holdId, UserId userId, String status) {
+            jdbc().update("""
+                    UPDATE seat_inventory
+                       SET status = ?, hold_id = ?, held_by = ?,
+                           held_at = NOW(3), expires_at = DATE_ADD(NOW(3), INTERVAL 5 MINUTE)
+                     WHERE id = ?
+                    """, status, holdId.asString(), userId.value(), seatId.value());
+        }
+
+        @Test
+        void 활성_좌석이_속한_회차를_돌려준다() {
+            HoldId hold = HoldId.newId();
+            hold(seat(SCHEDULE_A, "1A"), hold, OWNER, "HELD");
+            hold(seat(SCHEDULE_B, "1A"), hold, OWNER, "PAYING");
+
+            assertThat(scope.resolveActiveHold(hold, OWNER))
+                    .as("같은 회차의 다른 운행편·PAYING 도 포함한다")
+                    .contains(CHUSEOK);
+        }
+
+        @Test
+        void 활성_좌석이_없으면_빈_값이다() {
+            HoldId hold = HoldId.newId();
+            hold(seat(SCHEDULE_A, "1A"), hold, OWNER, "HELD");
+
+            assertThat(scope.resolveActiveHold(HoldId.newId(), OWNER))
+                    .as("없는 홀드").isEmpty();
+            assertThat(scope.resolveActiveHold(hold, STRANGER))
+                    .as("타 사용자 — 원인을 구분하지 않고 빈 값이다").isEmpty();
+        }
+
+        @Test
+        void SOLD_좌석은_활성이_아니다() {
+            HoldId hold = HoldId.newId();
+            hold(seat(SCHEDULE_A, "1A"), hold, OWNER, "SOLD");
+
+            assertThat(scope.resolveActiveHold(hold, OWNER)).isEmpty();
+        }
+
+        /** ★ 비정상 데이터. 임의 회차를 고르지 않고 거절한다. */
+        @Test
+        void 여러_회차에_걸친_홀드는_거절한다() {
+            HoldId hold = HoldId.newId();
+            hold(seat(SCHEDULE_A, "1A"), hold, OWNER, "HELD");
+            hold(seat(SCHEDULE_C, "1A"), hold, OWNER, "HELD");   // 설 회차
+
+            assertThatThrownBy(() -> scope.resolveActiveHold(hold, OWNER))
+                    .isInstanceOf(SaleEventScopeException.class)
+                    .hasMessageContaining("서로 다른 판매 회차");
+        }
+
+        /**
+         * ★ 실행 계획 — 기존 인덱스로 홀드 좌석 수에 갇힌다. 새 인덱스를 추가하지 않았다.
+         *
+         * <p>운영 SQL 상수를 그대로 EXPLAIN 한다.
+         */
+        @Test
+        void 홀드_인덱스로_좌석을_먼저_좁히고_운행편은_PK_로_찾는다() {
+            HoldId hold = HoldId.newId();
+            hold(seat(SCHEDULE_A, "1A"), hold, OWNER, "HELD");
+            hold(seat(SCHEDULE_A, "2A"), hold, OWNER, "HELD");
+            // 같은 사용자의 다른 홀드 — (held_by, status) 로 시작하면 이것까지 스캔한다.
+            for (int i = 0; i < 20; i++) {
+                hold(seat(SCHEDULE_B, i + "Z"), HoldId.newId(), OWNER, "HELD");
+            }
+
+            List<Map<String, Object>> plan = jdbc().queryForList(
+                    "EXPLAIN " + JdbcSaleEventScopeRepository.HOLD_SCOPE_SQL,
+                    hold.asString(), OWNER.value());
+
+            assertThat(plan).hasSize(2);
+            Map<String, Object> seats = plan.get(0);
+            Map<String, Object> schedules = plan.get(1);
+
+            assertThat(String.valueOf(seats.get("table"))).isEqualTo("s");
+            assertThat(String.valueOf(seats.get("key")))
+                    .as("좌석은 홀드 인덱스로 좁힌다")
+                    .isEqualTo("idx_seat_inventory_hold");
+            assertThat(String.valueOf(seats.get("type"))).isEqualTo("ref");
+            assertThat(String.valueOf(schedules.get("table"))).isEqualTo("ts");
+            assertThat(String.valueOf(schedules.get("type")))
+                    .as("운행편은 PK 로 한 건씩")
+                    .isEqualTo("eq_ref");
+            assertThat(String.valueOf(schedules.get("key"))).isEqualTo("PRIMARY");
         }
     }
 }

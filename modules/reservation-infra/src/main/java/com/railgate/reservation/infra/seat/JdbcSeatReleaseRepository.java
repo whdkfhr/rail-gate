@@ -2,6 +2,7 @@ package com.railgate.reservation.infra.seat;
 
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
+import com.railgate.reservation.hold.SeatReleasePort;
 import com.railgate.reservation.seat.SeatId;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -74,20 +75,20 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * 다만 {@link JdbcTemplate} 은 {@code DataSourceUtils} 를 통해 커넥션을 얻으므로,
  * 같은 {@link DataSource} 위에 활성 트랜잭션이 있으면 <b>그 트랜잭션에 참여한다.</b>
  * 외부에서 롤백하면 해제도 롤백된다. 이 동작은 테스트로 검증했다.
- * 향후 quota 감소와 같은 트랜잭션으로 묶는다면 경계는 애플리케이션 서비스가 소유해야 하며,
- * 그 트랜잭션 안에 외부 I/O 를 넣지 않는다 (규칙 10).
+ * quota 감소와 같은 트랜잭션으로 묶는 경계는 {@code ReleaseHoldService}(Task 2H-B)가
+ * 소유하며, 그 트랜잭션 안에 외부 I/O 를 넣지 않는다 (규칙 10).
  *
  * <h2>이 클래스가 하지 않는 것</h2>
  *
  * <ul>
  *   <li><b>REST API 와 멱등키 저장소</b> — 저장소 수준 구현이다.
  *       <b>FR-2.5 가 완성된 것이 아니다.</b> 앱 배선은 후속이다.</li>
- *   <li><b>I-12</b> quota 감소 — 반환값(해제된 좌석 수)이 그 연동에 쓰일 값이지만
- *       {@code user_hold_quota}(V6)와 저장소는 있지만 <b>해제 경로의 감소가 연동되지 않았다.</b></li>
+ *   <li><b>I-12</b> quota 감소 — 이 클래스가 직접 하지 않는다. {@code ReleaseHoldService}
+ *       (Task 2H-B)가 같은 트랜잭션에서 반환값만큼 줄인다. 확정·만료 경로는 여전히 미연동이다.</li>
  *   <li><b>규칙 32</b> 감사 로그, <b>규칙 35</b> 메트릭.</li>
  * </ul>
  */
-public class JdbcSeatReleaseRepository {
+public class JdbcSeatReleaseRepository implements SeatReleasePort {
 
     /**
      * 후보 조회가 사용하는 인덱스 (V3). 정의는 {@code (hold_id)} 하나다.
@@ -198,6 +199,7 @@ public class JdbcSeatReleaseRepository {
      *         다른 사용자의 홀드거나, 이미 SOLD 이거나, 그 밖에 조건에 맞는 행이 없는 경우다.
      *         <b>0 이 좌석이 지금 AVAILABLE 임을 증명하지 않으며 인증 성공을 뜻하지도 않는다.</b>
      */
+    @Override
     public int releaseAll(HoldId holdId, UserId userId) {
         return release(holdId, userId, findReleasableSeats(holdId, userId));
     }
