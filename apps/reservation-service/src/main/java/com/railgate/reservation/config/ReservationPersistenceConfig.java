@@ -1,9 +1,11 @@
 package com.railgate.reservation.config;
 
 import com.railgate.reservation.hold.SeatHoldPort;
+import com.railgate.reservation.hold.SeatReleasePort;
 import com.railgate.reservation.infra.quota.JdbcUserHoldQuotaRepository;
 import com.railgate.reservation.infra.saleevent.JdbcSaleEventScopeRepository;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
+import com.railgate.reservation.infra.seat.JdbcSeatReleaseRepository;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
 import com.railgate.reservation.saleevent.SaleEventScopePort;
 import java.time.Duration;
@@ -87,5 +89,14 @@ public class ReservationPersistenceConfig {
         // 이미 그것이므로 다운캐스팅하지 않는다 — 캐스팅은 컴파일러가 확인해 줄 수 있는
         // 조건을 런타임으로 미루는 일이다.
         return new JdbcMultiSeatHoldRepository(dataSource, transactionManager, HOLD_DURATION);
+    }
+
+    /**
+     * 자발적 해제 (Task 2H-B). 같은 {@code dataSource} 를 받으므로
+     * {@code ReleaseHoldService} 의 트랜잭션에서 quota 감소와 같은 커넥션을 쓴다.
+     */
+    @Bean
+    public SeatReleasePort seatReleasePort(DataSource dataSource) {
+        return new JdbcSeatReleaseRepository(dataSource);
     }
 }

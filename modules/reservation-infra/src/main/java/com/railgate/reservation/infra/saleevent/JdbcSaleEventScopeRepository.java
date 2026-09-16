@@ -1,11 +1,14 @@
 package com.railgate.reservation.infra.saleevent;
 
+import com.railgate.reservation.HoldId;
+import com.railgate.reservation.UserId;
 import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.saleevent.SaleEventScopePort;
 import com.railgate.reservation.saleevent.SaleEventScopeException;
 import com.railgate.reservation.seat.SeatId;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -171,6 +174,72 @@ public class JdbcSaleEventScopeRepository implements SaleEventScopePort {
                             .formatted(seatIds, distinctEvents));
         }
         return new SaleEventId(resolved.get(0));
+    }
+
+    /**
+     * 활성 홀드의 좌석이 속한 회차를 찾는다. <b>테스트가 이 문자열을 그대로 EXPLAIN 한다.</b>
+     *
+     * <h2>인덱스와 조인 순서</h2>
+     *
+     * <p>좌석을 {@code idx_seat_inventory_hold}(V3, {@code hold_id})로 먼저 좁힌다.
+     * {@code JdbcSeatReleaseRepository.FIND_SEATS_SQL} 과 같은 인덱스이며 근거도 같다 —
+     * {@code (held_by, status)} 는 그 사용자의 활성 좌석을 전부 스캔한 뒤 걸러내므로
+     * 비용이 홀드 좌석 수가 아니라 사용자 활성 좌석 수에 비례한다.
+     * 그 뒤 {@code train_schedule} 은 PK 로 {@code eq_ref} 한 건씩이다.
+     * {@code STRAIGHT_JOIN} 인 이유는 {@link #resolveSql} 과 같다 — 통계가 흔들려도
+     * 조인 순서가 뒤집히지 않게 한다.
+     *
+     * <p><b>새 인덱스를 추가하지 않았다.</b> 기존 인덱스로 홀드 좌석 수(≤4)에 갇히는 계획이
+     * 나온다는 것을 EXPLAIN 어서션이 확인한다.
+     *
+     * <h2>DISTINCT 를 쓰지 않는 이유</h2>
+     *
+     * <p>{@link #resolveSql} 과 같다. 좌석마다 한 행을 받아야 "회차가 하나로 모이는가" 를
+     * Java 쪽에서 판단할 수 있고, 조회 행 수 자체가 스냅숏의 활성 좌석 수를 알려준다.
+     *
+     * <h2>잠금 없는 조회다</h2>
+     *
+     * <p>{@code FOR UPDATE} 가 없다. 좌석을 먼저 잠그면 quota → seat 순서(TASK-002G-B)가
+     * 뒤집힌다. 결과는 스냅숏이며 최종 판단은 해제 UPDATE 가 다시 한다.
+     */
+    public static final String HOLD_SCOPE_SQL = """
+            SELECT ts.sale_event_id
+              FROM seat_inventory s FORCE INDEX (idx_seat_inventory_hold)
+              STRAIGHT_JOIN train_schedule ts ON ts.id = s.schedule_id
+             WHERE s.hold_id = ?
+               AND s.held_by = ?
+               AND s.status  IN ('HELD', 'PAYING')
+            """;
+
+    /**
+     * 활성 홀드가 속한 판매 회차를 해석한다.
+     *
+     * @throws SaleEventScopeException 활성 좌석이 둘 이상의 회차에 걸쳐 있는 경우
+     */
+    @Override
+    public Optional<SaleEventId> resolveActiveHold(HoldId holdId, UserId userId) {
+        Objects.requireNonNull(holdId, "holdId");
+        Objects.requireNonNull(userId, "userId");
+
+        List<Long> resolved = jdbc.queryForList(
+                HOLD_SCOPE_SQL, Long.class, holdId.asString(), userId.value());
+
+        if (resolved.isEmpty()) {
+            // 원인을 구분하지 않는다 — 이미 해제됐거나, 없는 홀드거나, 남의 홀드거나, SOLD 거나.
+            // 구분해 노출하면 홀드 식별자로 남의 상태를 탐색하는 수단이 된다.
+            return Optional.empty();
+        }
+
+        Set<Long> distinctEvents = Set.copyOf(resolved);
+        if (distinctEvents.size() != 1) {
+            // 한 홀드는 한 요청에서 만들어지고 선점 경로가 회차 혼합을 거부하므로
+            // 정상 데이터에서는 일어나지 않는다. 그래도 임의로 하나를 고르면
+            // 무관한 회차의 카운터를 줄이게 된다. 쓰기 전에 거절한다.
+            throw new SaleEventScopeException(
+                    "홀드 %s (사용자 %d) 의 활성 좌석이 서로 다른 판매 회차 %s 에 걸쳐 있다. 비정상 데이터이며 감소할 회차를 고를 수 없다"
+                            .formatted(holdId.asString(), userId.value(), distinctEvents));
+        }
+        return Optional.of(new SaleEventId(resolved.get(0)));
     }
 
     private static String placeholders(int count) {

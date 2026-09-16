@@ -8,6 +8,7 @@ import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.hold.SeatHoldPort;
 import com.railgate.reservation.quota.QuotaAcquireOutcome;
+import com.railgate.reservation.quota.QuotaReleaseOutcome;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
 import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.saleevent.SaleEventScopeException;
@@ -16,6 +17,7 @@ import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.seat.SeatUnavailableException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -240,6 +242,11 @@ class HoldSeatsServiceTest {
             }
             return resolved;
         }
+
+        @Override
+        public Optional<SaleEventId> resolveActiveHold(HoldId holdId, UserId userId) {
+            throw new UnsupportedOperationException("선점 경로는 홀드로 해석하지 않는다");
+        }
     }
 
     private static final class RecordingQuota implements UserHoldQuotaPort {
@@ -268,6 +275,16 @@ class HoldSeatsServiceTest {
                 throw failure;
             }
             return outcome;
+        }
+
+        @Override
+        public Optional<Integer> lockRow(SaleEventId saleEventId, UserId userId) {
+            throw new UnsupportedOperationException("선점 경로는 잠금만 따로 얻지 않는다");
+        }
+
+        @Override
+        public QuotaReleaseOutcome release(SaleEventId saleEventId, UserId userId, int seats) {
+            throw new UnsupportedOperationException("선점 경로는 줄이지 않는다");
         }
     }
 

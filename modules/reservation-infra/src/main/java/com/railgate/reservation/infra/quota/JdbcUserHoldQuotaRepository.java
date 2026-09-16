@@ -2,6 +2,7 @@ package com.railgate.reservation.infra.quota;
 
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.quota.QuotaAcquireOutcome;
+import com.railgate.reservation.quota.QuotaReleaseOutcome;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
 import com.railgate.reservation.saleevent.SaleEventId;
 import java.util.ArrayList;
@@ -237,6 +238,7 @@ public class JdbcUserHoldQuotaRepository implements UserHoldQuotaPort {
      * @throws IllegalStateException    이 DataSource 의 트랜잭션에 참여하지 않은 경우
      * @throws IllegalArgumentException {@code seats} 가 범위를 벗어난 경우
      */
+    @Override
     public QuotaReleaseOutcome release(SaleEventId saleEventId, UserId userId, int seats) {
         requireEnlistedTransaction("release");
         Objects.requireNonNull(saleEventId, "saleEventId");
@@ -279,6 +281,7 @@ public class JdbcUserHoldQuotaRepository implements UserHoldQuotaPort {
      * @return 잠근 시점의 {@code held_seats}. 일치하는 행이 없으면 빈 값
      * @throws IllegalStateException 이 DataSource 의 트랜잭션에 참여하지 않은 경우
      */
+    @Override
     public Optional<Integer> lockRow(SaleEventId saleEventId, UserId userId) {
         requireEnlistedTransaction("lockRow");
         Objects.requireNonNull(saleEventId, "saleEventId");
