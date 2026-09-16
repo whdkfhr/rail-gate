@@ -2,6 +2,8 @@ package com.railgate.reservation.infra.saleevent;
 
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
+import com.railgate.reservation.quota.HoldAttribution;
+import com.railgate.reservation.quota.HoldAttributionException;
 import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.saleevent.SaleEventScopePort;
 import com.railgate.reservation.saleevent.SaleEventScopeException;
@@ -240,6 +242,59 @@ public class JdbcSaleEventScopeRepository implements SaleEventScopePort {
                             .formatted(holdId.asString(), userId.value(), distinctEvents));
         }
         return Optional.of(new SaleEventId(resolved.get(0)));
+    }
+
+    /**
+     * 결제 중인 단일 좌석의 귀속(점유자·회차)을 읽는다. <b>테스트가 이 문자열을 그대로 EXPLAIN 한다.</b>
+     *
+     * <p>좌석은 PK 로 한 건({@code const})이고, 운행편도 PRIMARY 로 한 건이다 — 접근 유형은
+     * 옵티마이저가 좌석 쪽을 상수로 접은 뒤 운행편까지 상수로 볼 수 있어 {@code const} 또는
+     * {@code eq_ref} 중 하나이며, 테스트는 둘 다 허용한다.
+     * 새 인덱스가 필요 없고 추가하지 않았다. {@code STRAIGHT_JOIN} 인 이유는 다른 두 조회와 같다.
+     *
+     * <p>{@code hold_id}·{@code status = 'PAYING'} 조건은 확정 UPDATE 의 {@code WHERE} 와 같다.
+     * 그래야 "귀속을 읽은 행" 과 "확정할 행" 이 같은 조건으로 골라진다.
+     * 그래도 결과는 스냅숏이다 — 그 사이 상태가 바뀌면 UPDATE 가 0 건이 되고,
+     * 그 경우 서비스는 감소하지 않는다.
+     *
+     * <p>{@code FOR UPDATE} 가 없다. quota → seat 순서를 지키기 위해서다.
+     */
+    public static final String PAYING_SEAT_ATTRIBUTION_SQL = """
+            SELECT s.held_by, ts.sale_event_id
+              FROM seat_inventory s
+              STRAIGHT_JOIN train_schedule ts ON ts.id = s.schedule_id
+             WHERE s.id      = ?
+               AND s.hold_id = ?
+               AND s.status  = 'PAYING'
+            """;
+
+    /**
+     * 결제 중인 단일 좌석의 귀속을 해석한다.
+     *
+     * @throws HoldAttributionException 조건에 맞는 행이 있는데 {@code held_by} 가 없는 경우
+     */
+    @Override
+    public Optional<HoldAttribution> resolvePayingSeat(SeatId seatId, HoldId holdId) {
+        Objects.requireNonNull(seatId, "seatId");
+        Objects.requireNonNull(holdId, "holdId");
+
+        List<HoldAttribution> rows = jdbc.query(PAYING_SEAT_ATTRIBUTION_SQL,
+                (rs, rowNum) -> {
+                    long heldBy = rs.getLong("held_by");
+                    if (rs.wasNull()) {
+                        // 활성 좌석은 항상 점유자를 갖는다 (I-8). 없으면 손상 데이터(V-7c)다.
+                        // 대상은 있으므로 "대상 없음" 과 구분한다. 다른 소유자를 추측하지 않는다.
+                        throw new HoldAttributionException(
+                                "좌석 %d 는 홀드 %s 로 결제 중인데 held_by 가 없다. 어느 사용자의 quota 인지 정할 수 없어 확정을 거절한다"
+                                        .formatted(seatId.value(), holdId.asString()));
+                    }
+                    return new HoldAttribution(
+                            new UserId(heldBy), new SaleEventId(rs.getLong("sale_event_id")));
+                },
+                seatId.value(), holdId.asString());
+
+        // PK 조건이므로 0 또는 1 행이다.
+        return rows.stream().findFirst();
     }
 
     private static String placeholders(int count) {

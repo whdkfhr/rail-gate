@@ -7,6 +7,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.infra.MySqlTestSupport;
+import com.railgate.reservation.quota.HoldAttribution;
+import com.railgate.reservation.quota.HoldAttributionException;
 import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.schedule.TrainSchedule;
 import com.railgate.reservation.schedule.TrainScheduleId;
@@ -484,6 +486,85 @@ class JdbcSaleEventScopeRepositoryTest extends MySqlTestSupport {
                     .as("운행편은 PK 로 한 건씩")
                     .isEqualTo("eq_ref");
             assertThat(String.valueOf(schedules.get("key"))).isEqualTo("PRIMARY");
+        }
+    }
+
+    /**
+     * ★ Task 2H-C — 결제 중인 단일 좌석의 귀속(점유자·회차)을 해석한다.
+     *
+     * <p>확정 UPDATE 가 {@code hold_id}·{@code held_by} 를 지우므로 UPDATE 전에 읽어야 하는 값이다.
+     */
+    @Nested
+    @DisplayName("★ 결제 중 좌석의 귀속 해석 (Task 2H-C)")
+    class 결제_중_좌석_귀속_해석 {
+
+        private static final UserId OWNER = new UserId(77L);
+
+        private void setState(SeatId seatId, HoldId holdId, Long heldBy, String status) {
+            jdbc().update("""
+                    UPDATE seat_inventory
+                       SET status = ?, hold_id = ?, held_by = ?,
+                           held_at = NOW(3), expires_at = DATE_ADD(NOW(3), INTERVAL 5 MINUTE)
+                     WHERE id = ?
+                    """, status, holdId.asString(), heldBy, seatId.value());
+        }
+
+        @Test
+        void PAYING_좌석의_점유자와_회차를_돌려준다() {
+            HoldId hold = HoldId.newId();
+            SeatId seat = seat(SCHEDULE_C, "1A");   // 설 회차
+            setState(seat, hold, OWNER.value(), "PAYING");
+
+            assertThat(scope.resolvePayingSeat(seat, hold))
+                    .contains(new HoldAttribution(OWNER, SEOLLAL));
+        }
+
+        @Test
+        void 대상_없음은_빈_값이며_원인을_구분하지_않는다() {
+            HoldId hold = HoldId.newId();
+            SeatId paying = seat(SCHEDULE_A, "1A");
+            setState(paying, hold, OWNER.value(), "PAYING");
+            SeatId held = seat(SCHEDULE_A, "2A");
+            setState(held, hold, OWNER.value(), "HELD");
+
+            assertThat(scope.resolvePayingSeat(paying, HoldId.newId())).as("다른 홀드").isEmpty();
+            assertThat(scope.resolvePayingSeat(held, hold)).as("HELD — 아직 결제 전").isEmpty();
+            assertThat(scope.resolvePayingSeat(new SeatId(999_999L), hold)).as("없는 좌석").isEmpty();
+        }
+
+        /** ★ 손상 데이터 — 대상은 있는데 점유자가 없다. 대상 없음과 구분한다. */
+        @Test
+        void PAYING_인데_held_by_가_없으면_정합성_오류다() {
+            HoldId hold = HoldId.newId();
+            SeatId seat = seat(SCHEDULE_A, "1A");
+            setState(seat, hold, null, "PAYING");
+
+            assertThatThrownBy(() -> scope.resolvePayingSeat(seat, hold))
+                    .isInstanceOf(HoldAttributionException.class)
+                    .hasMessageContaining("held_by");
+        }
+
+        /**
+         * ★ 실행 계획 — 좌석은 PRIMARY/{@code const}, 운행편은 PRIMARY 사용이며 접근 유형은
+         * {@code const} 또는 {@code eq_ref} 를 허용한다. 새 인덱스 없음.
+         */
+        @Test
+        void 좌석과_운행편_모두_PK_로_한_건씩_찾는다() {
+            HoldId hold = HoldId.newId();
+            SeatId seat = seat(SCHEDULE_A, "1A");
+            setState(seat, hold, OWNER.value(), "PAYING");
+
+            List<Map<String, Object>> plan = jdbc().queryForList(
+                    "EXPLAIN " + JdbcSaleEventScopeRepository.PAYING_SEAT_ATTRIBUTION_SQL,
+                    seat.value(), hold.asString());
+
+            assertThat(plan).hasSize(2);
+            assertThat(String.valueOf(plan.get(0).get("table"))).isEqualTo("s");
+            assertThat(String.valueOf(plan.get(0).get("key"))).isEqualTo("PRIMARY");
+            assertThat(String.valueOf(plan.get(0).get("type"))).isEqualTo("const");
+            assertThat(String.valueOf(plan.get(1).get("table"))).isEqualTo("ts");
+            assertThat(String.valueOf(plan.get(1).get("key"))).isEqualTo("PRIMARY");
+            assertThat(String.valueOf(plan.get(1).get("type"))).isIn("const", "eq_ref");
         }
     }
 }
