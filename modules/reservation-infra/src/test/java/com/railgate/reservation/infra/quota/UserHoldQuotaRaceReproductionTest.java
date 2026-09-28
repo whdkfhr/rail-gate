@@ -7,7 +7,7 @@ import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.infra.MySqlTestSupport;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
-import com.railgate.reservation.infra.seat.ExpiryCandidate;
+import com.railgate.reservation.expiry.ExpiryCandidate;
 import com.railgate.reservation.infra.seat.JdbcSeatExpiryRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatHoldRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatReleaseRepository;

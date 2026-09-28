@@ -1,5 +1,6 @@
 package com.railgate.reservation.infra.seat;
 
+import com.railgate.reservation.expiry.ExpiryCandidate;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;

@@ -6,12 +6,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.ReservationId;
 import com.railgate.reservation.UserId;
+import com.railgate.reservation.expiry.ExpiredSeat;
+import com.railgate.reservation.expiry.ExpiryCandidate;
+import com.railgate.reservation.expiry.ExpiryCursor;
 import com.railgate.reservation.infra.MySqlTestSupport;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -446,6 +451,173 @@ class JdbcSeatExpiryRepositoryTest extends MySqlTestSupport {
 
             assertThat(String.valueOf(plan.get("key")))
                     .isEqualTo(JdbcSeatExpiryRepository.CANDIDATE_INDEX);
+        }
+    }
+
+    /**
+     * ★ Task 2H-D — quota 귀속을 함께 읽는 후보 조회와 키셋 커서 페이징.
+     *
+     * <p>기존 {@code findExpiredCandidates} 계약은 그대로 두고, 정산에 필요한 소유자·회차와
+     * 정렬 키를 더 읽으며 손상 행을 숨기지 않는 별도 조회다.
+     */
+    @Nested
+    @DisplayName("★ 귀속 포함 후보 조회와 키셋 커서 (Task 2H-D)")
+    class 귀속_포함_후보_조회 {
+
+        private final SaleEventId fixtureEvent = new SaleEventId(FIXTURE_SALE_EVENT_ID);
+
+        @Test
+        void 만료_후보의_홀드_소유자_회차를_함께_돌려준다() {
+            HoldId hold = holdOf(1);
+            long id = heldSeat("1A", hold, PAST);
+
+            List<ExpiredSeat> seats = repository.findExpiredSeats(10, Optional.empty());
+
+            assertThat(seats).hasSize(1);
+            ExpiredSeat seat = seats.get(0);
+            assertThat(seat.seatId().value()).isEqualTo(id);
+            assertThat(seat.holdId()).contains(hold);
+            assertThat(seat.heldBy()).contains(USER);
+            assertThat(seat.saleEventId()).isEqualTo(fixtureEvent);
+            assertThat(seat.isSettleable()).isTrue();
+            assertThat(seat.expiresAt()).as("정렬 키도 함께 — 커서를 만들 수 있다").isNotNull();
+        }
+
+        @Test
+        void 미만료_AVAILABLE_SOLD_는_후보가_아니다() {
+            heldSeat("1A", holdOf(1), FUTURE);
+            newSeat("2A");
+            long sold = payingSeat("3A", holdOf(3), PAST);
+            jdbc().update("UPDATE seat_inventory SET status = 'SOLD', expires_at = NULL WHERE id = ?", sold);
+
+            assertThat(repository.findExpiredSeats(10, Optional.empty())).isEmpty();
+        }
+
+        /** ★ 손상 후보를 숨기지 않는다 — hold_id 나 held_by 가 NULL 이어도 후보로 읽는다. */
+        @Test
+        void 손상_후보를_숨기지_않고_사유를_구분한다() {
+            long noHold = heldSeat("1A", holdOf(1), PAST);
+            jdbc().update("UPDATE seat_inventory SET hold_id = NULL WHERE id = ?", noHold);
+            long noOwner = heldSeat("2A", holdOf(2), PAST);
+            jdbc().update("UPDATE seat_inventory SET held_by = NULL WHERE id = ?", noOwner);
+            long normal = heldSeat("3A", holdOf(3), PAST);
+
+            List<ExpiredSeat> seats = repository.findExpiredSeats(10, Optional.empty());
+
+            assertThat(seats).extracting(e -> e.seatId().value())
+                    .containsExactlyInAnyOrder(noHold, noOwner, normal);
+            assertThat(seats).filteredOn(e -> e.seatId().value() == noHold).singleElement()
+                    .satisfies(e -> {
+                        assertThat(e.isSettleable()).isFalse();
+                        assertThat(e.corruptionReason()).get().asString().contains("hold_id");
+                    });
+            assertThat(seats).filteredOn(e -> e.seatId().value() == noOwner).singleElement()
+                    .satisfies(e -> {
+                        assertThat(e.isSettleable()).isFalse();
+                        assertThat(e.corruptionReason()).get().asString().contains("held_by");
+                    });
+            assertThat(repository.findExpiredCandidates(10))
+                    .as("기존 조회는 hold_id 없는 행을 계속 제외한다 — 계약 유지")
+                    .extracting(c -> c.seatId().value())
+                    .containsExactlyInAnyOrder(noOwner, normal);
+        }
+
+        @Test
+        void expires_at_id_순서와_LIMIT_을_지킨다() {
+            long later = heldSeat("1A", holdOf(1), "DATE_SUB(NOW(3), INTERVAL 1 SECOND)");
+            long earlier = heldSeat("2A", holdOf(2), "DATE_SUB(NOW(3), INTERVAL 10 SECOND)");
+            long earliest = heldSeat("3A", holdOf(3), "DATE_SUB(NOW(3), INTERVAL 20 SECOND)");
+
+            assertThat(repository.findExpiredSeats(2, Optional.empty()))
+                    .extracting(e -> e.seatId().value())
+                    .containsExactly(earliest, earlier);
+            assertThat(later).isPositive();
+        }
+
+        @Test
+        void pageSize_가_0_이하면_거부한다() {
+            assertThatThrownBy(() -> repository.findExpiredSeats(0, Optional.empty()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        /** ★ 키셋 커서 — 커서 뒤부터 읽고, 같은 expires_at 은 id 로 갈린다. */
+        @Test
+        void 커서_뒤부터_읽고_같은_만료_시각은_id_로_갈린다() {
+            long first = heldSeat("1A", holdOf(1), "DATE_SUB(NOW(3), INTERVAL 20 SECOND)");
+            long tieA = heldSeat("2A", holdOf(2), "DATE_SUB(NOW(3), INTERVAL 10 SECOND)");
+            long tieB = heldSeat("2B", holdOf(3), "DATE_SUB(NOW(3), INTERVAL 10 SECOND)");
+            // 두 좌석의 만료 시각을 완전히 같게 만든다 — 페이지 경계의 tie 를 재현한다.
+            jdbc().update("UPDATE seat_inventory SET expires_at = "
+                    + "(SELECT e FROM (SELECT expires_at e FROM seat_inventory WHERE id = ?) x) WHERE id = ?",
+                    tieA, tieB);
+
+            List<ExpiredSeat> page1 = repository.findExpiredSeats(1, Optional.empty());
+            assertThat(page1).extracting(e -> e.seatId().value()).containsExactly(first);
+
+            List<ExpiredSeat> page2 = repository.findExpiredSeats(1, Optional.of(page1.get(0).cursor()));
+            List<ExpiredSeat> page3 = repository.findExpiredSeats(1, Optional.of(page2.get(0).cursor()));
+            List<ExpiredSeat> page4 = repository.findExpiredSeats(1, Optional.of(page3.get(0).cursor()));
+
+            assertThat(List.of(page2.get(0).seatId().value(), page3.get(0).seatId().value()))
+                    .as("★ 만료 시각이 같아도 id 오름차순으로 둘 다 나온다")
+                    .containsExactly(Math.min(tieA, tieB), Math.max(tieA, tieB));
+            assertThat(page4).as("뒤에 후보가 없다").isEmpty();
+        }
+
+        /** ★ 앞 후보가 회수돼 사라져도 커서는 위치를 잃지 않는다 (OFFSET 이면 건너뛴다). */
+        @Test
+        void 앞_후보가_사라져도_커서는_다음_후보를_건너뛰지_않는다() {
+            long first = heldSeat("1A", holdOf(1), "DATE_SUB(NOW(3), INTERVAL 30 SECOND)");
+            long second = heldSeat("2A", holdOf(2), "DATE_SUB(NOW(3), INTERVAL 20 SECOND)");
+            long third = heldSeat("3A", holdOf(3), "DATE_SUB(NOW(3), INTERVAL 10 SECOND)");
+
+            List<ExpiredSeat> page1 = repository.findExpiredSeats(1, Optional.empty());
+            ExpiryCursor cursor = page1.get(0).cursor();
+            assertThat(repository.expire(List.of(page1.get(0).toCandidate()))).isEqualTo(1);
+
+            assertThat(repository.findExpiredSeats(2, Optional.of(cursor)))
+                    .extracting(e -> e.seatId().value())
+                    .as("★ 사라진 first 때문에 second 를 건너뛰지 않는다")
+                    .containsExactly(second, third);
+            assertThat(first).isPositive();
+        }
+
+        /** ★ 실행 계획 — 두 SQL 모두 만료 후보 인덱스, filesort 없음, 운행편은 PK. 새 인덱스 없음. */
+        @Test
+        void 두_조회_모두_후보_인덱스를_쓰고_filesort_하지_않는다() {
+            for (int i = 0; i < 30; i++) {
+                heldSeat(i + "Z", holdOf(200 + i), PAST);
+            }
+
+            List<Map<String, Object>> firstPage = jdbc().queryForList(
+                    "EXPLAIN " + JdbcSeatExpiryRepository.FIND_ATTRIBUTED_CANDIDATES_SQL, 10);
+            assertThat(firstPage).hasSize(2);
+            assertThat(String.valueOf(firstPage.get(0).get("table"))).isEqualTo("s");
+            assertThat(String.valueOf(firstPage.get(0).get("key")))
+                    .isEqualTo(JdbcSeatExpiryRepository.CANDIDATE_INDEX);
+            assertThat(String.valueOf(firstPage.get(0).get("Extra"))).doesNotContain("filesort");
+            assertThat(String.valueOf(firstPage.get(1).get("table"))).isEqualTo("ts");
+            assertThat(String.valueOf(firstPage.get(1).get("key"))).isEqualTo("PRIMARY");
+            assertThat(String.valueOf(firstPage.get(1).get("type"))).isEqualTo("eq_ref");
+
+            // ★ 커서 값은 DB 에서 읽는다. JVM 시계로 만들면 세션 시간대 차이로 조건이
+            //    항상 거짓이 되어 옵티마이저가 계획을 접어 버린다 (실제로 관측했다).
+            java.sql.Timestamp cursorAt = jdbc().queryForObject(
+                    "SELECT MIN(expires_at) FROM seat_inventory WHERE status IN ('HELD','PAYING')",
+                    java.sql.Timestamp.class);
+            List<Map<String, Object>> afterCursor = jdbc().queryForList(
+                    "EXPLAIN " + JdbcSeatExpiryRepository.FIND_ATTRIBUTED_CANDIDATES_AFTER_SQL,
+                    cursorAt, cursorAt, 0L, 10);
+            assertThat(afterCursor).hasSize(2);
+            assertThat(String.valueOf(afterCursor.get(0).get("key")))
+                    .isEqualTo(JdbcSeatExpiryRepository.CANDIDATE_INDEX);
+            assertThat(String.valueOf(afterCursor.get(0).get("type")))
+                    .as("range 이지만 이것만으로 커서 하한을 증명하지 않는다 — "
+                            + "expires_at <= NOW(3) 만으로도 range 가 나온다. "
+                            + "실제 하한 적용은 SeatExpiryCursorScanTest 가 스캔 행 수로 잰다")
+                    .isEqualTo("range");
+            assertThat(String.valueOf(afterCursor.get(0).get("Extra"))).doesNotContain("filesort");
+            assertThat(String.valueOf(afterCursor.get(1).get("key"))).isEqualTo("PRIMARY");
         }
     }
 }

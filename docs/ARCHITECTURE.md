@@ -222,9 +222,9 @@ MSW가 같은 계약의 성공·경합·만료·결제 미확정 응답을 제�
 > [TASK-002G-E-A](experiments/TASK-002G-E-A-sale-event-domain.md) 의 도메인 모델에 이어
 > [TASK-002G-E-B2](experiments/TASK-002G-E-B2-sale-event-persistence.md) 에서 **테이블(V4·V5)과 Spring JDBC 저장소까지 구현됐다.**
 > `seat_inventory.schedule_id` 에 외래 키가 붙었다.
-> **`UserHoldQuota` 는 V6 테이블과 저장소, 선점·자발적 해제·단일 좌석 확정 유스케이스 배선까지 구현됐다
+> **`UserHoldQuota` 는 V6 테이블과 저장소, 선점·자발적 해제·단일 좌석 확정·만료 배치 서비스 배선까지 구현됐다
 > ([TASK-002H-A](experiments/TASK-002H-A-hold-application-service.md), [TASK-002H-B](experiments/TASK-002H-B-release-application-service.md)).
-> ([TASK-002H-C](experiments/TASK-002H-C-confirmation-application-service.md)). 다만 만료 경로의 감소가 없어 I-12 가 요청 경로 전체에 강제된 상태는 아니다.**
+> ([TASK-002H-C](experiments/TASK-002H-C-confirmation-application-service.md), [TASK-002H-D](experiments/TASK-002H-D-expiry-application-service.md)). 다만 스케줄러·backfill·API 가 없어 운영 활성화가 완료된 상태는 아니다.**
 
 ```mermaid
 graph LR
@@ -354,20 +354,24 @@ UPDATE user_hold_quota SET held_seats = held_seats + ?
 | 없는 행 | **자동 생성하지 않는다.** `lockRow` 가 빈 값으로 알린다 |
 | 최후 방어선 | `CHECK (0 <= held_seats <= 4)` |
 
-> **★ 선점·자발적 해제·단일 좌석 확정 세 경로가 연결됐다.**
+> **★ 선점·자발적 해제·단일 좌석 확정·만료 네 경로가 서비스 수준에서 연결됐다.**
 > [TASK-002H-A](experiments/TASK-002H-A-hold-application-service.md) 의 `HoldSeatsService` 가
 > "회차 해석 → quota 확보 → quota 조건부 증가 → 다좌석 원자 선점" 을,
 > [TASK-002H-B](experiments/TASK-002H-B-release-application-service.md) 의 `ReleaseHoldService` 가
 > "회차 해석(비잠금) → quota 행 잠금 → 홀드 해제 → **실제 해제 수만큼** quota 감소" 를
 > [TASK-002H-C](experiments/TASK-002H-C-confirmation-application-service.md) 의 `ConfirmSeatService` 가
 > "귀속 조회(비잠금) → quota 행 잠금 → 조건부 확정(`hold_id`·`PAYING`) → 성공한 1석 감소" 를
-> 각각 한 트랜잭션으로 묶는다. 세 경로 모두 quota → seat 순서로 잠근다.
+> [TASK-002H-D](experiments/TASK-002H-D-expiry-application-service.md) 의 `ExpireHoldsService` 가
+> "후보 조회(비잠금) → `(saleEventId, userId)` 그룹화 → 그룹마다 독립 트랜잭션에서 quota 행 잠금 →
+> PK 순 벌크 회수 → **실제 회수 수만큼** 감소" 를 각각 묶는다. 네 경로 모두 quota → seat 순서로 잠근다.
+> 만료 배치는 그룹 실패를 격리하고 일시적 실패만 새 트랜잭션으로 최대 3회 재시도하며,
+> 손상 후보(`hold_id`·`held_by` 없음)는 회수하지 않고 결과로 보고한다 (2G-F 계약 8가지 구현).
 > 서비스가 트랜잭션을 소유하고 저장소는 참여만 한다. 감소 경로는 행을 만들거나 값을 보정하지
 > 않으며, 좌석을 풀거나 확정했는데 카운터가 없거나 부족하면 그 변경까지 롤백한다.
 > 확정의 quota 귀속(사용자·회차)은 클라이언트 값이 아니라 UPDATE 전에 좌석 행에서 읽는다.
-> **그러나 만료 경로는 quota 를 줄이지 않아 만료로 회수된 좌석의 몫은 카운터에 남는다.**
-> 만료 경로를 연동하기 전에는 강제를 켤 수 없다. 확정은 결제 승인 확인을 호출자의 전제로 두며
-> I-15 는 아직 없다.
+> **그러나 운영 활성화는 아직이다.** 만료 배치를 부르는 `@Scheduled` 주체가 없고, backfill 을
+> 수행하지 않았으며, 손상 후보·실패 그룹은 감사 로그·메트릭이 없어 기록되지 않는다.
+> 확정은 결제 승인 확인을 호출자의 전제로 두며 I-15 는 아직 없다.
 > 기존 활성 좌석이 있는 배포는 강제를 켜기 전에 [TASK-002G-G](experiments/TASK-002G-G-user-hold-quota.md) §4 의 점검·backfill 을 마쳐야 한다.
 
 drift 는 `load-test/verify/user_hold_quota_drift.sql` 이 **읽기 전용으로** 탐지한다.

@@ -43,9 +43,9 @@ RailGate는 이 가운데 좌석 정합성 문제부터 범위를 좁혀, 단순
 
 | 영역 | 현재 상태 | 남은 구현 |
 |---|---|---|
-| 사용자별 선점 상한(I-12) | `user_hold_quota` migration(V6)과 조건부 `UPDATE` 저장소, 읽기 전용 drift 탐지 SQL, **선점 유스케이스**([TASK-002H-A](docs/experiments/TASK-002H-A-hold-application-service.md))와 **자발적 해제 유스케이스**([TASK-002H-B](docs/experiments/TASK-002H-B-release-application-service.md))·**단일 좌석 확정 유스케이스**([TASK-002H-C](docs/experiments/TASK-002H-C-confirmation-application-service.md))의 같은 트랜잭션 연동 | 만료 경로의 감소 연동, REST API — **선점·해제·확정만 연결됐고 만료가 남아 요청 경로 전체에는 아직 강제되지 않음** |
-| 만료 배치 운영 계약 | 사용자 그룹별 실패 격리·재시도·다중 스위퍼·drift 탐지를 테스트 전용 코드로 검토 | 운영 스위퍼, 스케줄러, quota 연동 |
-| 애플리케이션 서비스·API | 좌석 선점·자발적 해제·단일 좌석 확정 유스케이스와 도메인 포트 5종, JDBC 저장소 배선 완료 | 결제 시작 서비스, 결제 승인 검증(I-15), REST API, 멱등키 저장소 |
+| 사용자별 선점 상한(I-12) | `user_hold_quota` migration(V6)과 조건부 `UPDATE` 저장소, 읽기 전용 drift 탐지 SQL, **선점 유스케이스**([TASK-002H-A](docs/experiments/TASK-002H-A-hold-application-service.md))와 **자발적 해제 유스케이스**([TASK-002H-B](docs/experiments/TASK-002H-B-release-application-service.md))·**단일 좌석 확정 유스케이스**([TASK-002H-C](docs/experiments/TASK-002H-C-confirmation-application-service.md))·**만료 배치 서비스**([TASK-002H-D](docs/experiments/TASK-002H-D-expiry-application-service.md))의 같은 트랜잭션 연동 | 스케줄러 배선, backfill 수행, REST API, 감사 로그·메트릭 — **네 경로가 서비스 수준에서 연결됐지만 부르는 주체가 없어 운영 활성화 전** |
+| 만료 배치 | 사용자 그룹별 실패 격리·재시도·다중 스위퍼·drift 탐지 계약([TASK-002G-F](docs/experiments/TASK-002G-F-expiry-sweeper-operating-contract.md))을 운영 서비스로 구현하고 quota 감소를 연동. 실패 후보를 지나는 키셋 커서 탐색([TASK-002H-D](docs/experiments/TASK-002H-D-expiry-application-service.md)) | `@Scheduled` 배선, 잡 락 도입 판단(측정 후), 손상·실패 그룹 알림 |
+| 애플리케이션 서비스·API | 좌석 선점·자발적 해제·단일 좌석 확정 유스케이스와 만료 배치 서비스, 도메인 포트 6종, JDBC 저장소 배선 완료 | 결제 시작 서비스, 결제 승인 검증(I-15), REST API, 멱등키 저장소 |
 | 대기열 | `queue-service`, `queue-domain`, `queue-token` 모듈 골격만 존재 | Redis 대기열, 입장 토큰 발급·검증, SSE |
 | 결제 | 좌석의 `HELD → PAYING → SOLD` 상태 전이만 구현 | 결제 승인 모델, Mock PG, 실제 PG 연동, 실패 복구 |
 | 사용자 웹 | 화면·상태·테스트 계약만 문서화 | React 애플리케이션과 E2E 테스트 |
@@ -53,9 +53,12 @@ RailGate는 이 가운데 좌석 정합성 문제부터 범위를 좁혀, 단순
 
 좌석 선점 유스케이스가 `user_hold_quota` 증가와 다좌석 원자 선점을, 자발적 해제 유스케이스가
 좌석 해제와 실제 해제 수만큼의 quota 감소를, 단일 좌석 확정 유스케이스가 `PAYING → SOLD` 전환과
-1석 감소를 각각 하나의 트랜잭션으로 묶습니다. 다만 **만료 경로는 여전히 quota를 줄이지
-않습니다.** 홀드가 만료되면 카운터가 그대로 남습니다. 따라서 **I-12(1인당 4석 상한)는 요청 경로
-전체에 강제된 상태가 아니며**, 만료 경로를 연동하기 전에는 운영에서 켤 수 없습니다.
+1석 감소를, 만료 배치 서비스가 `(saleEventId, userId)` 그룹별 독립 트랜잭션에서 만료 좌석 회수와
+실제 회수 수만큼의 감소를 각각 묶습니다. **네 경로가 서비스 수준에서 연결됐지만 운영 활성화가
+완료된 것은 아닙니다** — 만료 배치를 주기적으로 부르는 `@Scheduled` 배선이 없고(진행 보장은
+호출자가 반복 호출하거나 커서로 이어갈 때만 성립합니다), 기존 데이터
+backfill 을 수행하지 않았으며, REST API 가 없어 실제 요청은 어느 서비스도 통과하지 않습니다.
+손상 후보와 실패 그룹은 결과로만 돌아오고 감사 로그·메트릭이 없어 어디에도 기록되지 않습니다.
 확정은 결제 승인을 호출자가 확인했다는 전제로 동작하며 **I-15(결제 승인 검증)는 아직 없습니다.**
 운행편의 회차 소속도 도메인과 저장소의 정상 경로에서는 재배정을 차단하지만
 DB 직접 SQL 수준의 변경은 막지 못합니다.
@@ -304,7 +307,7 @@ Testcontainers 통합 테스트 때문에 Docker가 필요합니다. 아직 서�
 
 아래 항목은 목표 범위이며 현재 구현 완료 항목에 포함하지 않습니다.
 
-1. 만료 경로의 quota 감소 연동과 스위퍼 배선 — 선점·자발적 해제·확정 경로는 연결됨
+1. 만료 배치의 `@Scheduled` 배선(2G-F 다중 실행 계약 유지)과 기존 데이터 backfill 수행 — 네 경로의 서비스 연동은 완료
 2. REST API와 멱등키 저장소 구성, 결제 시작 서비스와 결제 승인 검증(I-15)
 3. Redis Lua 기반 대기열과 서명된 입장 토큰, SSE 구성
 4. React 사용자 웹과 Playwright 예매 E2E 구현
