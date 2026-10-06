@@ -35,3 +35,23 @@ management:
 logging:
   level:
     com.railgate: DEBUG
+
+# ---------------------------------------------------------------------------
+# 만료 배치 스케줄러 (TASK-002H-E)
+#
+# ★ 기본 비활성이다. 만료 회수는 좌석을 되돌리고 quota 를 줄이는 쓰기 작업이므로,
+#   기존 데이터의 backfill(TASK-002G-G §4)과 drift 점검(V-7a·b·c)을 마치기 전에
+#   켜면 안 된다. enabled=false 이면 스케줄 등록도 스레드 풀도 생기지 않는다.
+#
+# 켤 때는 pageSize·maxPages·fixed-delay 가 모두 양수여야 하고, 아니면 기동 단계에서 실패한다.
+# ---------------------------------------------------------------------------
+railgate:
+  expiry:
+    sweep:
+      enabled: false
+      # 직전 실행이 끝난 뒤 다음 실행까지의 간격. fixedRate 가 아니라 fixedDelay 다.
+      fixed-delay: 30s
+      # 후보 SELECT 한 번의 LIMIT. 벌크 UPDATE 크기의 상한이 아니다.
+      page-size: 100
+      # 한 tick 이 읽을 최대 페이지 수. 검사 후보 수의 상한은 page-size × max-pages.
+      max-pages: 4
