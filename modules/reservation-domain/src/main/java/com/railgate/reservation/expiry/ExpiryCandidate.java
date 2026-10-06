@@ -1,4 +1,4 @@
-package com.railgate.reservation.infra.seat;
+package com.railgate.reservation.expiry;
 
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.seat.SeatId;

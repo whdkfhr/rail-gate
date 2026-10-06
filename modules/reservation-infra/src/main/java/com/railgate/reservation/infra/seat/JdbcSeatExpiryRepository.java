@@ -1,15 +1,24 @@
 package com.railgate.reservation.infra.seat;
 
 import com.railgate.reservation.HoldId;
+import com.railgate.reservation.UserId;
+import com.railgate.reservation.expiry.ExpiredSeat;
+import com.railgate.reservation.expiry.ExpiryCursor;
+import com.railgate.reservation.expiry.ExpiryCandidate;
+import com.railgate.reservation.expiry.SeatExpiryPort;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.sql.Timestamp;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 
 /**
  * 만료된 선점 좌석의 회수. <b>I-10 의 실행 주체이자 I-11 의 한쪽 당사자다.</b>
@@ -72,8 +81,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *       여기는 한 번의 스윕만 수행한다.</li>
  *   <li><b>자발적 해제</b> (FR-2.5) — {@link JdbcSeatReleaseRepository} 가 담당한다.
  *       저장소 CAS 까지는 있으나 REST API 와 멱등키 저장소는 없다.</li>
- *   <li><b>I-12</b> 1인당 좌석 상한 — {@code user_hold_quota}(V6)와 저장소는 있지만 <b>만료 경로의 감소가 연동되지 않았다.</b>
- *       회수는 quota 감소가 연동돼야 할 지점 중 하나다.</li>
+ *   <li><b>I-12</b> 1인당 좌석 상한 — 이 클래스가 직접 줄이지 않는다.
+ *       {@code ExpireHoldsService}(Task 2H-D)가 {@code (saleEventId, userId)} 그룹마다
+ *       독립 트랜잭션에서 {@link #expire} 의 반환값만큼 줄인다. 주기 실행 배선은 여전히 없다.</li>
  *   <li><b>규칙 32</b> 감사 로그, <b>규칙 35</b> 메트릭 — 회수 이력과 계측이 없다.</li>
  * </ul>
  *
@@ -88,7 +98,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * stale 비율, DB 부하를 측정한 뒤 판단한다. 잡 락 자체가 그것이 죽으면 스위퍼 전체가
  * 멈추는 새로운 가용성 위험을 만든다는 점도 함께 고려해야 한다.
  */
-public class JdbcSeatExpiryRepository {
+public class JdbcSeatExpiryRepository implements SeatExpiryPort {
 
     /** 후보 조회가 사용하는 인덱스 (V2). 실행 계획 테스트가 이 값을 검증한다. */
     static final String CANDIDATE_INDEX = "idx_seat_inventory_expiry_candidate";
@@ -137,6 +147,81 @@ public class JdbcSeatExpiryRepository {
              LIMIT ?
             """;
 
+    /**
+     * quota 귀속(점유자·회차)을 함께 읽는 후보 조회 (Task 2H-D). <b>테스트가 이 문자열을 그대로 EXPLAIN 한다.</b>
+     *
+     * <p>{@link #FIND_CANDIDATES_SQL} 과 같은 인덱스·정렬·LIMIT 이며 두 가지가 다르다.
+     * <ul>
+     *   <li>{@code train_schedule} 을 {@code STRAIGHT_JOIN} 해 회차를 얻는다. 좌석을 구동 테이블로
+     *       고정하는 이유는 {@code JdbcSaleEventScopeRepository} 와 같다 — 통계가 흔들려도
+     *       조인 순서가 뒤집히지 않게 한다</li>
+     *   <li><b>{@code hold_id IS NOT NULL} 을 붙이지 않는다.</b> 붙이면 소유권 없는 활성 좌석이
+     *       조용히 후보에서 빠져 영원히 남고 아무도 모른다. 손상 행은 <b>후보로 읽어 분리 보고</b>한다
+     *       (TASK-002G-F 실험 F). 회수 UPDATE 는 {@code (id, hold_id)} 쌍을 검사하므로
+     *       호출자가 손상 후보를 회수에 넘기지 않는 한 안전하다</li>
+     * </ul>
+     *
+     * <p>{@code FORCE INDEX} 를 붙이는 이유는 {@link #FIND_CANDIDATES_SQL} 과 같다 — 조인이 붙어
+     * 옵티마이저의 선택지가 늘어난 만큼 filesort 로 빠질 여지를 계약으로 막는다.
+     * 힌트를 뺐을 때 실제로 어떤 계획이 나오는지는 측정하지 않았다.
+     */
+    static final String FIND_ATTRIBUTED_CANDIDATES_SQL = """
+            SELECT s.id, s.hold_id, s.held_by, s.expires_at, ts.sale_event_id
+              FROM seat_inventory s FORCE INDEX (idx_seat_inventory_expiry_candidate)
+              STRAIGHT_JOIN train_schedule ts ON ts.id = s.schedule_id
+             WHERE s.status     IN ('HELD', 'PAYING')
+               AND s.expires_at <= NOW(3)
+             ORDER BY s.expires_at ASC, s.id ASC
+             LIMIT ?
+            """;
+
+    /**
+     * 커서 <b>뒤</b>의 한 페이지. {@link #FIND_ATTRIBUTED_CANDIDATES_SQL} 에 키셋 조건만 더했다.
+     *
+     * <h2>★ 행 생성자 비교를 쓰지 않는 이유 — 실측으로 바로잡았다</h2>
+     *
+     * <p>처음에는 {@code (s.expires_at, s.id) > (?, ?)} 행 생성자 비교를 썼다.
+     * "복합 인덱스의 범위 시작점으로 그대로 쓰인다" 고 적었지만 <b>측정해 보니 틀렸다.</b>
+     * 이 SQL 의 다른 조건({@code expires_at <= NOW(3)}, {@code status IN (...)})과 함께 놓이면
+     * MySQL 8.4 는 <b>{@code expires_at <= NOW(3)} 만으로 범위를 잡고 그 안을 전부 훑으면서</b>
+     * 행 생성자 조건을 필터로 적용했다.
+     *
+     * <p>{@code SeatExpiryCursorScanTest} 의 {@code Handler_read%} 실측 (만료 시각이 같은 좌석 600행):
+     * <pre>
+     *                                   커서가 앞을 가리킬 때   커서가 마지막 직전
+     *   (expires_at, id) > (?, ?)              3행                601행   ← 선형 증가
+     *   expires_at > ? OR (= ? AND id > ?)     3행                  3행
+     * </pre>
+     * 커서가 뒤로 갈수록 읽는 행이 선형으로 늘었다 — <b>키셋 페이징의 목적 자체가 무너진다.</b>
+     *
+     * <p>그래서 <b>하한을 명시적으로 풀어 쓴다.</b> {@code OR} 이 들어가지만 두 갈래 모두
+     * 같은 인덱스의 범위이므로 옵티마이저가 하한을 인식한다.
+     * <b>두 시각 파라미터에는 DB 에서 읽은 같은 커서 값을 넣는다.</b>
+     *
+     * <h2>EXPLAIN 만으로는 증명되지 않는다</h2>
+     *
+     * <p>{@code type = range} 나 인덱스 이름은 커서 하한의 증거가 아니다 —
+     * {@code expires_at <= NOW(3)} 하나만으로도 같은 인덱스의 range 가 나온다.
+     * 그래서 테스트는 <b>실제로 읽은 행 수</b>를 잰다.
+     *
+     * <p><b>{@code OFFSET} 을 쓰지 않는다.</b> 앞 페이지의 좌석이 회수되어 후보 집합에서
+     * 사라지므로, 건너뛸 행 수로 위치를 잡으면 그만큼 정상 후보를 건너뛴다
+     * ({@link ExpiryCursor} 참고).
+     *
+     * <p>만료 판정은 여전히 {@code expires_at <= NOW(3)} 이다. 커서는 정렬 위치만 정한다.
+     * 인덱스·정렬·LIMIT·조인은 첫 페이지 SQL 과 같다. <b>새 인덱스를 추가하지 않았다.</b>
+     */
+    static final String FIND_ATTRIBUTED_CANDIDATES_AFTER_SQL = """
+            SELECT s.id, s.hold_id, s.held_by, s.expires_at, ts.sale_event_id
+              FROM seat_inventory s FORCE INDEX (idx_seat_inventory_expiry_candidate)
+              STRAIGHT_JOIN train_schedule ts ON ts.id = s.schedule_id
+             WHERE s.status     IN ('HELD', 'PAYING')
+               AND s.expires_at <= NOW(3)
+               AND (s.expires_at > ? OR (s.expires_at = ? AND s.id > ?))
+             ORDER BY s.expires_at ASC, s.id ASC
+             LIMIT ?
+            """;
+
     private final JdbcTemplate jdbc;
 
     public JdbcSeatExpiryRepository(DataSource dataSource) {
@@ -159,10 +244,42 @@ public class JdbcSeatExpiryRepository {
     }
 
     /**
+     * quota 귀속을 포함한 만료 후보 (Task 2H-D). 손상 후보도 포함한다.
+     *
+     * @throws IllegalArgumentException {@code batchSize} 가 0 이하인 경우
+     */
+    @Override
+    public List<ExpiredSeat> findExpiredSeats(int pageSize, Optional<ExpiryCursor> after) {
+        requirePositiveBatchSize(pageSize);
+        Objects.requireNonNull(after, "after");
+
+        RowMapper<ExpiredSeat> mapper = (rs, rowNum) -> {
+            String holdId = rs.getString("hold_id");
+            Long heldBy = rs.getObject("held_by", Long.class);
+            return new ExpiredSeat(
+                    new SeatId(rs.getLong("id")),
+                    Optional.ofNullable(holdId).map(HoldId::of),
+                    Optional.ofNullable(heldBy).map(UserId::new),
+                    new SaleEventId(rs.getLong("sale_event_id")),
+                    rs.getTimestamp("expires_at").toLocalDateTime());
+        };
+
+        return after
+                .map(cursor -> {
+                    // 두 시각 파라미터는 DB 에서 읽어 온 같은 커서 값이다. 새로 만들지 않는다.
+                    Timestamp expiresAt = Timestamp.valueOf(cursor.expiresAt());
+                    return jdbc.query(FIND_ATTRIBUTED_CANDIDATES_AFTER_SQL, mapper,
+                            expiresAt, expiresAt, cursor.seatId(), pageSize);
+                })
+                .orElseGet(() -> jdbc.query(FIND_ATTRIBUTED_CANDIDATES_SQL, mapper, pageSize));
+    }
+
+    /**
      * 후보를 회수한다. 각 후보에 대해 상태·홀드 소유권·만료 여부를 <b>다시</b> 검사한다.
      *
      * @return 실제로 회수된 행 수. 후보 수보다 적을 수 있으며 그것은 오류가 아니다.
      */
+    @Override
     public int expire(List<ExpiryCandidate> candidates) {
         Objects.requireNonNull(candidates, "candidates");
         if (candidates.isEmpty()) {

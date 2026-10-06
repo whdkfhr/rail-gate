@@ -1,11 +1,14 @@
 package com.railgate.reservation.config;
 
+import com.railgate.reservation.application.expiry.RetryBackoff;
+import com.railgate.reservation.expiry.SeatExpiryPort;
 import com.railgate.reservation.hold.SeatConfirmationPort;
 import com.railgate.reservation.hold.SeatHoldPort;
 import com.railgate.reservation.hold.SeatReleasePort;
 import com.railgate.reservation.infra.quota.JdbcUserHoldQuotaRepository;
 import com.railgate.reservation.infra.saleevent.JdbcSaleEventScopeRepository;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
+import com.railgate.reservation.infra.seat.JdbcSeatExpiryRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatReleaseRepository;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
@@ -112,5 +115,20 @@ public class ReservationPersistenceConfig {
     @Bean
     public SeatConfirmationPort seatConfirmationPort(DataSource dataSource) {
         return new JdbcSeatPaymentRepository(dataSource, PAYMENT_DURATION);
+    }
+
+    /** 만료 후보 조회와 회수 (Task 2H-D). 그룹 트랜잭션은 {@code ExpireHoldsService} 가 소유한다. */
+    @Bean
+    public SeatExpiryPort seatExpiryPort(DataSource dataSource) {
+        return new JdbcSeatExpiryRepository(dataSource);
+    }
+
+    /**
+     * 재시도 백오프 (Task 2H-D). 측정으로 정한 값이 아니다 — {@link RetryBackoff#boundedExponential} 참고.
+     * 테스트는 대기하지 않는 구현을 직접 주입한다.
+     */
+    @Bean
+    public RetryBackoff retryBackoff() {
+        return RetryBackoff.boundedExponential();
     }
 }

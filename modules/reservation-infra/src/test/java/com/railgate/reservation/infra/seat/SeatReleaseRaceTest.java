@@ -1,5 +1,6 @@
 package com.railgate.reservation.infra.seat;
 
+import com.railgate.reservation.expiry.ExpiryCandidate;
 import com.railgate.reservation.hold.SeatConfirmationOutcome;
 import static org.assertj.core.api.Assertions.assertThat;
 

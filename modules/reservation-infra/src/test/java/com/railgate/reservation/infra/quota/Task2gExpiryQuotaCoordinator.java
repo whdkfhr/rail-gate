@@ -1,7 +1,7 @@
 package com.railgate.reservation.infra.quota;
 
 import com.railgate.reservation.HoldId;
-import com.railgate.reservation.infra.seat.ExpiryCandidate;
+import com.railgate.reservation.expiry.ExpiryCandidate;
 import com.railgate.reservation.infra.seat.JdbcSeatExpiryRepository;
 import com.railgate.reservation.seat.SeatId;
 import java.util.ArrayList;
