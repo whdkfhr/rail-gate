@@ -108,7 +108,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * </ul>
  */
 @Service
-public class ExpireHoldsService {
+public class ExpireHoldsService implements ExpirySweeper {
 
     /** 최초 시도 포함 최대 시도 횟수. 백오프는 최대 2회 (TASK-002G-F 계약 5). */
     static final int MAX_ATTEMPTS = 3;
@@ -159,6 +159,7 @@ public class ExpireHoldsService {
      *         {@link ExpirySweepRequest#continueAfter} 로 되돌려 줘야 한다
      * @throws IllegalStateException 활성 트랜잭션 안에서 호출된 경우, 또는 백오프 중 인터럽트
      */
+    @Override
     public ExpirySweepResult sweep(ExpirySweepRequest request) {
         Objects.requireNonNull(request, "request");
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
