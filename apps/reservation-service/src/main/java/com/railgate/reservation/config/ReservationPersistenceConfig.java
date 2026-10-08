@@ -4,6 +4,7 @@ import com.railgate.reservation.application.expiry.RetryBackoff;
 import com.railgate.reservation.expiry.SeatExpiryPort;
 import com.railgate.reservation.hold.SeatConfirmationPort;
 import com.railgate.reservation.hold.SeatHoldPort;
+import com.railgate.reservation.hold.SeatPaymentPort;
 import com.railgate.reservation.hold.SeatReleasePort;
 import com.railgate.reservation.infra.quota.JdbcUserHoldQuotaRepository;
 import com.railgate.reservation.infra.saleevent.JdbcSaleEventScopeRepository;
@@ -51,6 +52,12 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
  * <p><b>저장소는 포트 타입으로 노출한다.</b> 구현체 타입으로 노출하면 서비스가
  * {@code reservation-infra} 를 알게 되고, 모듈 경계가 구성 파일 밖으로 새어 나간다.
  *
+ * <p><b>예외 하나 — {@link JdbcSeatPaymentRepository}.</b> 이 어댑터는 결제 시작과 확정 두 포트를
+ * 함께 구현한다. 포트마다 {@code new} 로 빈을 하나씩 만들면 같은 클래스의 인스턴스가 둘 생기고,
+ * Spring 은 생성 후 실제 타입으로 후보를 고르므로 <b>두 빈 모두 두 포트의 후보</b>가 되어 주입이
+ * 모호해진다. 그래서 인스턴스를 하나만 만들고 그 빈이 두 포트를 함께 만족하게 한다.
+ * 선언 타입이 구현체여도 <b>서비스는 여전히 포트로만 주입받는다</b> — 구현체를 아는 것은 이 클래스뿐이다.
+ *
  * <p><b>트랜잭션 관리자는 구체 타입으로 노출한다.</b>
  * {@link JdbcMultiSeatHoldRepository} 가 savepoint 를 만들기 위해 그 타입을 요구하기
  * 때문이다. 다운캐스팅으로 미루는 대신 선언 타입에서 맞춘다.
@@ -65,7 +72,7 @@ public class ReservationPersistenceConfig {
     /** 선점 유지 시간 (REQUIREMENTS.md P-4). */
     private static final Duration HOLD_DURATION = Duration.ofMinutes(5);
 
-    /** 결제 유효 시간 (REQUIREMENTS.md P-4). 확정 포트는 쓰지 않지만 저장소 생성자가 요구한다. */
+    /** 결제 유효 시간 (REQUIREMENTS.md P-4). 결제 시작의 {@code GREATEST(기존 만료, NOW(3) + 이 값)} 에 쓰인다. */
     private static final Duration PAYMENT_DURATION = Duration.ofMinutes(5);
 
     /**
@@ -109,11 +116,12 @@ public class ReservationPersistenceConfig {
     }
 
     /**
-     * 단일 좌석 확정 (Task 2H-C). 포트는 {@code confirm} 만 노출한다 —
-     * {@code startPayment} 는 확정 유스케이스가 쓰지 않으므로 포트에 없다.
+     * 단일 좌석 결제 시작(Task 2H-F)과 확정(Task 2H-C). <b>하나의 인스턴스</b>가
+     * {@link SeatPaymentPort} 와 {@link SeatConfirmationPort} 를 함께 만족한다 (클래스 주석 참고).
+     * {@code StartPaymentService} 는 앞의 포트만, {@code ConfirmSeatService} 는 뒤의 포트만 주입받는다.
      */
     @Bean
-    public SeatConfirmationPort seatConfirmationPort(DataSource dataSource) {
+    public JdbcSeatPaymentRepository seatPaymentRepository(DataSource dataSource) {
         return new JdbcSeatPaymentRepository(dataSource, PAYMENT_DURATION);
     }
 

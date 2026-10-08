@@ -137,6 +137,10 @@
 > 트랜잭션에서 "quota 행 잠금 → PK 순 벌크 회수 → 실제 회수 수만큼 감소" 를 묶고, 그룹 실패를
 > 격리하며 일시적 실패만 최대 3회 재시도한다 ([TASK-002H-D](experiments/TASK-002H-D-expiry-application-service.md)).
 >
+> **결제 시작 서비스** — `StartPaymentService` 가 기존 `HELD → PAYING` 조건부 UPDATE 를 트랜잭션 경계에
+> 연결했다 ([TASK-002H-F](experiments/TASK-002H-F-start-payment-service.md)). `HELD`·`PAYING` 모두 활성 점유이므로
+> quota 를 조회·잠금·변경하지 않는다.
+>
 > 만료 배치의 **주기 실행 스케줄러도 배선됐다** ([TASK-002H-E](experiments/TASK-002H-E-expiry-scheduler.md)) — 다만 **기본 비활성**이며,
 > 켜기 전에 backfill 과 drift 점검(V-7a·b·c)을 마쳐야 한다.
 >

@@ -373,11 +373,13 @@ UPDATE user_hold_quota SET held_seats = held_seats + ?
 > ([TASK-002H-E](experiments/TASK-002H-E-expiry-scheduler.md)), backfill 을 수행하지 않았다. 배치 요약은 Micrometer·로그로 관측되지만
 > **규칙 32 의 좌석 상태 전이 감사 로그는 여전히 없다.**
 > 확정은 결제 승인 확인을 호출자의 전제로 두며 I-15 는 아직 없다.
+> [TASK-002H-F](experiments/TASK-002H-F-start-payment-service.md) 의 `StartPaymentService` 는 좌석 행 하나만
+> 조건부 UPDATE 하고 quota 를 건드리지 않는다 — `HELD → PAYING` 은 활성 점유 안의 전이다.
 > 기존 활성 좌석이 있는 배포는 강제를 켜기 전에 [TASK-002G-G](experiments/TASK-002G-G-user-hold-quota.md) §4 의 점검·backfill 을 마쳐야 한다.
 
 drift 는 `load-test/verify/user_hold_quota_drift.sql` 이 **읽기 전용으로** 탐지한다.
-자동 보정은 두지 않았다 — 확정 경로의 감소가 아직 없어 카운터가 "옳게" 클 수 있고,
-그 상태에서 좌석 집계에 맞추면 진짜 문제를 지운다.
+자동 보정은 두지 않았다 — backfill 전 데이터처럼 카운터가 좌석 집계와 다를 이유가 있는
+상태에서 집계에 맞추면 진짜 문제를 지운다.
 
 ### 만료 배치의 운영 계약 (결정됨, 미구현)
 

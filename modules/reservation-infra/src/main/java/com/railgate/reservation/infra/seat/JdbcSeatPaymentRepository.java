@@ -4,6 +4,8 @@ import com.railgate.reservation.HoldId;
 import com.railgate.reservation.ReservationId;
 import com.railgate.reservation.hold.SeatConfirmationOutcome;
 import com.railgate.reservation.hold.SeatConfirmationPort;
+import com.railgate.reservation.hold.SeatPaymentOutcome;
+import com.railgate.reservation.hold.SeatPaymentPort;
 import com.railgate.reservation.seat.SeatId;
 import java.time.Duration;
 import java.util.Objects;
@@ -43,13 +45,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *       {@code expires_at} 이 <b>없다</b>는 것이다. 이미 만료된 PAYING 좌석도 확정되므로
  *       스위퍼와의 경쟁은 예외가 아니라 정상 경로다.</li>
  *   <li><b>I-12</b> 1인당 좌석 상한. 이 클래스가 직접 줄이지 않는다.
- *       {@code ConfirmSeatService}(Task 2H-C)가 같은 트랜잭션에서 확정 성공 시 1 을 줄인다.
- *       만료 경로는 여전히 미연동이다.
+ *       {@code ConfirmSeatService}(Task 2H-C)가 같은 트랜잭션에서 확정 성공 시 1 을 줄이고,
+ *       만료 회수는 {@code ExpireHoldsService}(Task 2H-D)가 줄인다. 결제 시작은 활성 점유 안의 전이({@code HELD → PAYING})라 카운터를 바꾸지 않으며
+ *       {@code StartPaymentService}(Task 2H-F)도 quota 를 건드리지 않는다.
  *       (I-9 다좌석 원자성은 {@link JdbcMultiSeatHoldRepository} 가 담당한다)</li>
  *   <li>멱등성. 재확정이 0 건인 것은 CAS 결과일 뿐 최초 응답을 돌려주는 것과 다르다.</li>
  * </ul>
  */
-public class JdbcSeatPaymentRepository implements SeatConfirmationPort {
+public class JdbcSeatPaymentRepository implements SeatPaymentPort, SeatConfirmationPort {
 
     /**
      * 결제 시작. 검사와 갱신이 한 문장이다.
@@ -129,6 +132,7 @@ public class JdbcSeatPaymentRepository implements SeatConfirmationPort {
      * @return {@link SeatPaymentOutcome#STARTED} 이면 이 요청이 결제 단계를 확보했다.
      *         {@link SeatPaymentOutcome#NOT_STARTED} 는 정상 동작이다.
      */
+    @Override
     public SeatPaymentOutcome startPayment(SeatId seatId, HoldId holdId) {
         Objects.requireNonNull(seatId, "seatId");
         Objects.requireNonNull(holdId, "holdId");

@@ -58,7 +58,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li><b>멱등성</b> — 이미 {@code SOLD} 인 좌석에 같은 요청을 다시 보내면
  *       {@code NOT_CONFIRMED} 가 돌아오고 quota 는 다시 줄지 않는다. 그러나 그것은 CAS 결과이지
  *       <b>"최초 응답을 재생한 멱등 성공" 이 아니다</b> (규칙 17).</li>
- *   <li><b>만료 경로의 quota 감소</b> — 여전히 미연동. <b>I-12 는 아직 운영 활성화 전이다.</b></li>
+ *   <li><b>I-12 운영 활성화</b> — 만료 경로의 quota 감소는 {@code ExpireHoldsService}(Task 2H-D)로
+ *       연결됐지만 스케줄러가 기본 비활성이고(Task 2H-E) backfill 도 수행 전이다.</li>
  *   <li>다좌석 예약 확정, REST API, 감사 로그(규칙 32), 메트릭(규칙 35).</li>
  * </ul>
  *
