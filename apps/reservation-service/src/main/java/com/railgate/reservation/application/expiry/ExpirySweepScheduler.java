@@ -45,9 +45,16 @@ import org.slf4j.LoggerFactory;
  * 전진시키면 처리되지 않은 구간을 건너뛴다. 다음 tick 은 <b>같은 커서로 그 구간을 다시 본다</b> —
  * 회수는 조건부 UPDATE 라 이미 처리된 좌석은 0 건이 되므로 다시 보는 것이 안전하다.
  *
- * <p>예외를 스케줄러 밖으로 던지지 않는다. Spring 의 {@code @Scheduled} 는 예외가 나가면
- * <b>그 작업의 이후 실행을 멈춘다</b> — 한 번의 실패로 배치가 영구히 죽는다.
- * 대신 로깅·계측하고 다음 tick 을 살린다. 다만 <b>인터럽트는 삼키지 않는다</b> —
+ * <p>예외를 스케줄러 밖으로 던지지 않는다. 이것은 Spring 이 반복 작업을 멈추기 때문이 아니다 —
+ * Spring 의 기본 스케줄러({@code ThreadPoolTaskScheduler}·{@code ConcurrentTaskScheduler})는
+ * 별도 {@code ErrorHandler} 가 없으면 반복 작업의 예외를 <b>로깅하고 억제</b>한다
+ * ({@code TaskUtils.LOG_AND_SUPPRESS_ERROR_HANDLER}). 다음 실행은 그대로 예약된다.
+ * 그 동작은 스케줄러 구성에 달려 있다 — 사용자 정의 {@code ErrorHandler} 는 다르게 처리할 수 있고,
+ * JDK {@code ScheduledExecutorService} 를 직접 쓰면 예외가 난 반복 작업의 이후 실행이 억제된다.
+ *
+ * <p>여기서 직접 잡는 것은 실패 처리를 <b>어댑터가 명시적으로 소유</b>하기 위한 선택이다.
+ * 커서를 전진시키지 않는 재개 정책, {@code outcome=failure} 계측, 이어가기 여부·요청 크기를
+ * 담은 로그를 스케줄러 구성과 무관하게 같게 유지한다. 다만 <b>인터럽트는 삼키지 않는다</b> —
  * 플래그를 복원해 종료 요청이 전파되게 한다.
  *
  * <h2>이 어댑터가 하지 않는 것</h2>
@@ -78,7 +85,14 @@ public class ExpirySweepScheduler {
     private final ExpirySweepProperties properties;
     private final MeterRegistry meters;
 
-    /** 한 인스턴스 안의 실행 중첩 방지. 다중 인스턴스는 대상이 아니다. */
+    /**
+     * 한 인스턴스 안의 실행 중첩 방지. 다중 인스턴스는 대상이 아니다.
+     *
+     * <p>막힌 호출은 {@code outcome=skipped} 로 센다. 이 값은 <b>같은 어댑터에 tick 이 겹쳐
+     * 들어와 건너뛴 횟수</b>다. {@code fixedDelay} 등록은 직전 실행이 끝난 뒤 다음 실행을
+     * 예약하므로, 실행이 길다는 이유만으로는 겹치지 않고 {@code skipped} 도 오르지 않는다.
+     * 배치가 주기를 못 따라가는지는 이 값으로 알 수 없다.
+     */
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     /**

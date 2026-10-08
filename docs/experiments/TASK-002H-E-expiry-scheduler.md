@@ -43,7 +43,7 @@ interface ExpirySweeper { ExpirySweepResult sweep(ExpirySweepRequest request); }
 | `nextCursor` 가 비었다 (순회 완료) | 다음 tick 은 **처음부터** — 지나친 실패 후보 재확인 |
 | 그룹 실패·손상 후보가 있다 | **커서는 그대로 이어간다.** 그것은 그 그룹의 문제이고 탐색 위치와 무관하다 |
 | 호출이 예외로 끝났다 | **커서를 전진시키지 않는다.** 다음 tick 이 같은 구간을 다시 본다 |
-| 직전 tick 이 아직 돌고 있다 | **건너뛴다** (`skipped` 로 집계) |
+| 같은 어댑터에 tick 이 겹쳐 들어왔다 | **건너뛴다** (`skipped` 로 집계) |
 
 **한 tick 은 `sweep` 을 정확히 한 번만 부른다.** backlog 를 한 tick 에서 비우는 반복문을 두지
 않았다 — 그런 루프는 한 실행 시간을 backlog 크기에 비례하게 만들고 잠금 경합·커넥션 점유가
@@ -70,10 +70,20 @@ interface ExpirySweeper { ExpirySweepResult sweep(ExpirySweepRequest request); }
 않은 구간을 건너뛴다. 다시 보는 것은 안전하다 — 회수는 조건부 UPDATE 이므로 이미 처리된 좌석은
 `affected_rows = 0` 이 된다.
 
-**예외를 스케줄러 밖으로 던지지 않는다.** Spring 의 `@Scheduled` 는 예외가 나가면 **그 작업의
-이후 실행을 멈춘다** — 한 번의 실패로 배치가 영구히 죽는다. 로깅·계측하고 다음 tick 을 살린다.
-다만 **인터럽트는 삼키지 않는다** — cause 사슬에서 `InterruptedException` 을 찾으면 플래그를
-복원해 종료 요청이 전파되게 한다.
+**예외를 스케줄러 밖으로 던지지 않는다.** 이것은 Spring 이 반복 작업을 멈추기 때문이 아니다.
+Spring 의 기본 스케줄러(`ThreadPoolTaskScheduler`·`ConcurrentTaskScheduler`)는 별도 `ErrorHandler`
+가 없으면 반복 작업의 예외를 **로깅하고 억제**하며(`TaskUtils.LOG_AND_SUPPRESS_ERROR_HANDLER`,
+Spring Framework 7.0.8 소스로 확인) 다음 실행은 그대로 예약된다. 이 동작은 스케줄러 구성에
+달려 있다 — 사용자 정의 `ErrorHandler` 는 다르게 처리할 수 있고, JDK `ScheduledExecutorService`
+를 직접 쓰면 예외가 난 반복 작업의 이후 실행이 억제된다. 이 Task 는 둘 다 쓰지 않는다.
+
+어댑터가 직접 잡는 것은 **실패 처리를 명시적으로 소유**하기 위한 선택이다. 커서를 전진시키지 않는
+재개 정책, `outcome=failure` 계측, 이어가기 여부·요청 크기를 담은 로그를 스케줄러 구성과 무관하게
+같게 유지한다. 다만 **인터럽트는 삼키지 않는다** — cause 사슬에서 `InterruptedException` 을 찾으면
+플래그를 복원해 종료 요청이 전파되게 한다.
+
+> 단위 테스트는 `tick()` 을 손으로 부르므로 Spring 의 오류 처리를 거치지 않는다. 검증한 것은
+> 어댑터가 실패를 직접 처리한다는 계약이며, **Spring 의 예외 처리 동작은 테스트로 검증하지 않았다.**
 
 **그룹 재시도를 바깥에서 다시 구현하지 않았다.** 일시적 실패만 최대 3회 새 트랜잭션으로
 재시도하는 것은 서비스의 책임이다 (2H-D §4).
@@ -115,7 +125,7 @@ railgate:
 
 | 메트릭 | 태그 | 의미 |
 |---|---|---|
-| `railgate.expiry.sweep` | `outcome` = `success`/`failure`/`skipped` | tick 결과 |
+| `railgate.expiry.sweep` | `outcome` = `success`/`failure`/`skipped` | tick 결과. `skipped` 는 아래 참고 |
 | `railgate.expiry.seats.reclaimed` | 없음 | 실제 회수 좌석 수 |
 | `railgate.expiry.groups.failed` | `kind` = `GroupFailureKind` | 실패 그룹 수 |
 | `railgate.expiry.candidates.corrupt` | 없음 | 손상 후보 수 |
@@ -126,6 +136,10 @@ railgate:
   회수가 0 이면 `reclaimed` 카운터를 올리지도 않는다
 - **그룹 실패는 배치 실패가 아니다** — `groups.failed` 는 오르지만 `sweep{outcome=failure}` 는 오르지 않는다
 - 실패 그룹·손상 후보가 있으면 요약 로그가 `WARN`, 없으면 `INFO`
+- **`skipped` 는 같은 어댑터에 중첩 호출이 들어와 실행을 건너뛴 횟수다.** `fixedDelay` 등록은
+  직전 실행이 **끝난 뒤** 다음 실행을 예약하므로, 실행 시간이 길다는 이유만으로는 겹치지 않고
+  `skipped` 도 오르지 않는다. 오르는 것은 같은 빈을 다른 경로(수동 호출, 추가 스케줄 등록)가
+  동시에 부를 때다. **배치가 주기를 따라가는지는 이 값으로 알 수 없다** — §7 의 후속 관측 과제
 
 > ### ★ 이것은 규칙 32 의 감사 로그가 아니다
 >
@@ -136,6 +150,9 @@ railgate:
 ---
 
 ## 5. 검증 결과
+
+> 이 절은 **최초 커밋 `578a570` 당시의 관측**이다. 리뷰 보완 후의 결과는 §5-1 에 따로 적었고,
+> 여기의 배선 테스트 설명(5개)은 §5-1 의 배선 테스트(15개)로 대체됐다.
 
 ```
 git diff HEAD --check                           → clean
@@ -193,6 +210,56 @@ git diff HEAD --check                           → clean
 
 실제 시간을 기다리지 않는다 — 스케줄 등록은 Spring 의 몫이고 검증 대상은 tick 사이의 커서 이어가기다.
 
+### 5-1. 리뷰 보완 후 (PR #26 리뷰 지적 반영)
+
+**[P2] 활성화 배선 테스트가 실제로 만료 서비스를 불렀다.** 이전 §2 는 `fixed-delay=1h` 로
+"돌지 않게" 했지만, `@Scheduled` 에 `initialDelay` 가 없으면 Spring 7.0.8 은 초기 지연을 0 으로
+보고 등록 시각을 시작 시각으로 넘긴다(`ScheduledAnnotationBeanPostProcessor` →
+`ScheduledTaskRegistrar.scheduleFixedDelayTask`). `fixed-delay` 는 실행 **사이의** 간격이라 첫 실행은
+즉시 일어나고, 실제로 `scheduling-1` 스레드가 실제 만료 서비스를 부른 로그가 확인됐다. 공유 MySQL 의
+테이블 초기화·픽스처와 경쟁할 수 있었다.
+
+**보완** — `ExpirySchedulerWiringTest` 를 다시 짰다. 운영 코드는 바꾸지 않았다.
+
+- **§1 실제 앱 컨텍스트(MySQL)** — 기본값에서는 어댑터·래퍼 빈이 없고, `@EnableScheduling` 의
+  등록 처리기 빈도 없으며, `ScheduledTaskHolder` 가 보고하는 작업이 0개다. 서비스는 포트를 만족한다
+- **§2~§4 경량 컨텍스트(DB 없음)** — `ApplicationContextRunner` 에 운영 `ExpirySchedulerConfig` 를
+  그대로 올리고, 가짜 `ExpirySweeper` 와 **등록을 포착만 하고 실행하지 않는 `TaskScheduler`**
+  (`taskScheduler` 이름으로 등록)를 함께 준다. `@ConditionalOnProperty`·`@EnableScheduling`·`@Scheduled`
+  등록 경로는 운영과 같다. 포착 스케줄러는 실행기·스레드·타이머를 갖지 않으며, 반환하는
+  `ScheduledFuture` 는 Spring 이 종료 시 부르는 `cancel` 과 `getDelay`·`isCancelled` 를 지원한다
+
+| 절 | 검증 |
+|---|---|
+| §2 활성화 (6) | 어댑터·래퍼 등록 / 설정값이 실제 바인딩으로 주입 / **fixedDelay 작업 정확히 1개, 주기 45s, 시작 시각 ≤ 등록 시각(=실제라면 즉시 실행), 서비스 호출 0회** / 컨텍스트의 `TaskScheduler` 는 포착용 하나뿐이고 `ScheduledExecutorService` 없음 / **포착한 작업을 명시적으로 부르면 tick 으로 전달**(요청 크기·커서·success 계측) / **컨텍스트 종료 시 Spring 이 등록 작업을 취소** |
+| §3 비활성 (3) | 속성 없음·`enabled=false`·끈 상태의 잘못된 값 — 모두 기동하고, 등록 처리기 없음, 포착된 등록 0개, 서비스 호출 0회 |
+| §4 잘못된 설정 (4) | `page-size=0`·`max-pages=-1`·`fixed-delay=0s` 는 **실제 프로퍼티 바인딩 후 컨텍스트 시작 실패**(원인 `IllegalArgumentException`) / `fixed-delay=not-a-duration` 은 바인딩 실패(`BindException`) |
+
+**테스트 수가 바뀐 이유** — 배선 테스트 5개 → 15개(+10). 이전 §2(전체 컨텍스트로 활성화, 2개)는
+자동 실행이 일어나므로 제거했고, 이전 §3(생성자 직접 호출, 1개)은 컨텍스트 시작 실패 검증 4개로
+바꿨다. 같은 생성자 검증은 단위 테스트 §4 에 그대로 있다. 단위 15개·MySQL 진행 보장 2개는 바꾸지
+않았다 — 진행 보장 테스트는 원래 어댑터를 직접 만들어 `tick()` 을 손으로 부른다.
+
+```
+git diff HEAD --check                           → clean
+./gradlew check --rerun-tasks --max-workers=1   → BUILD SUCCESSFUL (1m 45s)
+```
+
+| 모듈 | tests | failures | errors | skipped |
+|---|---|---|---|---|
+| `modules:reservation-infra` | 560 | 0 | 0 | 0 |
+| `apps:reservation-service` | 163 | 0 | 0 | 0 |
+| `modules:reservation-domain` | 202 | 0 | 0 | 0 |
+| `apps:queue-service` | 1 | 0 | 0 | 0 |
+| **합계** | **926** | **0** | **0** | **0** |
+
+`apps:reservation-service` 의 테스트 결과 XML 에서 `scheduling-` 스레드 로그는 **0건**이다.
+어댑터 로그는 전부 `Test worker`(손으로 부른 tick) 또는 단위 테스트의 중첩 검증용 풀
+스레드에서 나왔다. 이번 실행은 다른 프로젝트 컨테이너를 멈추지 않은 상태에서 통과했다.
+
+**[P3] 문구 정정** — 예외 처리 설명(§2)과 `skipped` 의미(§4·§7)를 고쳤다. 정상 예외 처리 로직은
+바꾸지 않았다.
+
 ---
 
 ## 6. ★ 먼저 실패시킨 기록 (규칙 27)
@@ -224,7 +291,9 @@ RED A 가 이번 Task 의 핵심이다 — **커서를 이어가지 않으면 �
 
 - **스케줄러 스레드 풀 크기를 조정하지 않았다.** Spring 기본값(단일 스레드)을 쓰며,
   다른 `@Scheduled` 작업이 추가되면 서로 밀릴 수 있다. 지금은 이 작업뿐이다
-- **`skipped` 가 쌓이면 배치가 주기를 못 따라간다는 신호**지만 알람이 없다
+- **배치가 주기를 따라가는지 볼 지표가 없다.** `skipped` 는 그 신호가 아니다(§4).
+  실행 시간, 마지막 성공 시각, backlog·만료 지연 측정은 **후속 관측 과제**로 남긴다.
+  이번 보완에서 새 지표나 알람을 만들지 않았다
 - 손상 후보와 실패 그룹은 메트릭·로그로만 보이고 **조치 절차가 없다**
 
 ---
@@ -233,7 +302,7 @@ RED A 가 이번 Task 의 핵심이다 — **커서를 이어가지 않으면 �
 
 ```bash
 ./gradlew :apps:reservation-service:test --tests "*ExpirySweepSchedulerTest"
-./gradlew :apps:reservation-service:test --tests "*ExpirySchedulerWiringTest*"
+./gradlew :apps:reservation-service:test --tests "*ExpirySchedulerWiringTest*"   # DB 없는 §2~§4 + MySQL §1
 ./gradlew :apps:reservation-service:test --tests "*ExpirySchedulerProgressIntegrationTest"
 ./gradlew check --rerun-tasks --max-workers=1
 ```

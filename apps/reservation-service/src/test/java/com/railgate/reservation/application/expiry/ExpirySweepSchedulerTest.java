@@ -176,7 +176,12 @@ class ExpirySweepSchedulerTest {
                     .as("★★ 실패했으므로 같은 커서로 재개한다").contains(cursor(50));
         }
 
-        /** ★ 예외를 스케줄러 밖으로 던지지 않는다 — 던지면 Spring 이 이후 실행을 멈춘다. */
+        /**
+         * ★ 예외를 tick 밖으로 던지지 않고 실패를 계측한다.
+         *
+         * <p>tick 을 손으로 부르므로 Spring 스케줄러의 오류 처리({@code ErrorHandler})는 거치지 않는다 —
+         * 검증 대상은 어댑터가 실패를 직접 처리한다는 계약이지 Spring 의 동작이 아니다.
+         */
         @Test
         void 예외를_삼키지_않고_로깅_후_다음_tick_을_살린다() {
             sweeper.failures.put(1, new IllegalStateException("배치 실패"));
