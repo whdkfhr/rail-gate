@@ -193,7 +193,7 @@ class ReleaseHoldServiceIntegrationTest extends MySqlSpringTestSupport {
         /**
          * SOLD 대상은 0 건이다.
          *
-         * <p><b>픽스처 주의.</b> 확정 경로는 quota 와 미연동이라 직접 SQL 로 SOLD 를 만들었다.
+         * <p><b>픽스처 주의.</b> SOLD 는 확정 서비스를 거치지 않은 직접 SQL 이라 quota 감소가 없다.
          * 그래서 quota 가 1 로 남는 것은 <b>이 테스트가 만든 drift</b>이며 해제 경로의 문제가 아니다.
          * 관측 범위는 "SOLD 는 해제 대상이 아니고 quota 를 건드리지 않는다" 까지다.
          */
@@ -206,7 +206,7 @@ class ReleaseHoldServiceIntegrationTest extends MySqlSpringTestSupport {
             assertThat(release(hold, USER_A).releasedSeats()).isZero();
             assertThat(statusOf(a)).isEqualTo("SOLD");
             assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value()))
-                    .as("확정 미연동으로 남은 1 — 해제 경로가 건드리지 않는다").isEqualTo(1);
+                    .as("직접 SQL 확정으로 남은 1 — 해제 경로가 건드리지 않는다").isEqualTo(1);
         }
     }
 
@@ -223,7 +223,7 @@ class ReleaseHoldServiceIntegrationTest extends MySqlSpringTestSupport {
          * 참여하므로 회차 해석과 후보 조회는 옛 스냅숏(3석 HELD)을 보고, 해제 UPDATE 는
          * 잠금 읽기라 최신 상태(1석 SOLD)를 본다. 그래서 <b>후보 3, 실제 해제 2</b> 가 된다.
          *
-         * <p><b>픽스처 주의.</b> SOLD 는 직접 SQL 이다 (확정 미연동). 그래서 남는 quota 1 은
+         * <p><b>픽스처 주의.</b> SOLD 는 확정 서비스를 거치지 않은 직접 SQL 이다. 그래서 남는 quota 1 은
          * 이 테스트가 만든 drift 이며, 여기서 보는 것은 "감소가 후보 수 3 이 아니라
          * 실제 해제 수 2 만큼이다" 뿐이다.
          */

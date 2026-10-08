@@ -12,7 +12,7 @@ import com.railgate.reservation.expiry.ExpiryCandidate;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatExpiryRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
-import com.railgate.reservation.infra.seat.SeatPaymentOutcome;
+import com.railgate.reservation.hold.SeatPaymentOutcome;
 import com.railgate.reservation.seat.SeatId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

@@ -8,7 +8,7 @@ import com.railgate.reservation.ReservationId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.hold.SeatConfirmationOutcome;
 import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
-import com.railgate.reservation.infra.seat.SeatPaymentOutcome;
+import com.railgate.reservation.hold.SeatPaymentOutcome;
 import com.railgate.reservation.quota.HoldAttributionException;
 import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.support.MySqlSpringTestSupport;
