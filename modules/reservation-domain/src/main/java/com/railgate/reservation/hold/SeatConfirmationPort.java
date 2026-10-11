@@ -9,7 +9,7 @@ import com.railgate.reservation.seat.SeatId;
  *
  * <p>기존 저장소의 {@code confirm(SeatId, HoldId, ReservationId)} 계약 그대로다.
  * <b>다좌석 예약 확정으로 확대하지 않는다.</b> 결제 시작({@code startPayment})은
- * 이 포트에 없다 — 확정 유스케이스가 쓰지 않는다.
+ * 이 포트에 없다 — 확정 유스케이스가 쓰지 않으며 {@link SeatPaymentPort} 가 따로 맡는다.
  *
  * <p><b>결제 승인 여부를 검증하지 않는다.</b> 호출자가 승인을 확인한 뒤 부르는 것이 전제이며,
  * 그 전제를 DB 조건으로 강제하는 것은 I-15 의 몫이다 (미구현).

@@ -13,7 +13,7 @@ import com.railgate.reservation.infra.quota.Task2gfExpirySweeper.TransactionMode
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatExpiryRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
-import com.railgate.reservation.infra.seat.SeatPaymentOutcome;
+import com.railgate.reservation.hold.SeatPaymentOutcome;
 import com.railgate.reservation.seat.SeatId;
 import java.time.Duration;
 import java.util.List;

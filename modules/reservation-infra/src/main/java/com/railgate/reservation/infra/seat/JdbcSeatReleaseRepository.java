@@ -84,7 +84,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *   <li><b>REST API 와 멱등키 저장소</b> — 저장소 수준 구현이다.
  *       <b>FR-2.5 가 완성된 것이 아니다.</b> 앱 배선은 후속이다.</li>
  *   <li><b>I-12</b> quota 감소 — 이 클래스가 직접 하지 않는다. {@code ReleaseHoldService}
- *       (Task 2H-B)가 같은 트랜잭션에서 반환값만큼 줄인다. 확정·만료 경로는 여전히 미연동이다.</li>
+ *       (Task 2H-B)가 같은 트랜잭션에서 반환값만큼 줄인다. 확정·만료 경로는 각자의 서비스
+ *       (Task 2H-C·2H-D)가 줄인다.</li>
  *   <li><b>규칙 32</b> 감사 로그, <b>규칙 35</b> 메트릭.</li>
  * </ul>
  */

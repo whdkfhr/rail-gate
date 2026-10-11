@@ -447,7 +447,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
             // startPayment 는 만료 전에만 가능하다 (expires_at > NOW(3)).
             assertThat(new JdbcSeatPaymentRepository(dataSource(), Duration.ofMinutes(5))
                     .startPayment(new SeatId(confirmed), holdA))
-                    .isEqualTo(com.railgate.reservation.infra.seat.SeatPaymentOutcome.STARTED);
+                    .isEqualTo(com.railgate.reservation.hold.SeatPaymentOutcome.STARTED);
             expireSecondsAgo(first, 60);       // 첫 페이지에 들어갈 가장 오래된 후보
             expireSecondsAgo(confirmed, 50);
             expireSecondsAgo(released, 40);

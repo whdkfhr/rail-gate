@@ -351,7 +351,7 @@ class MultiSweeperQuotaSettlementTest extends MySqlTestSupport {
             // 상태 전이를 우회하지 않는다 (2G-C 와 같은 방식).
             // startPayment 는 expires_at > NOW(3) 을 요구하므로 만료보다 먼저 해야 한다.
             assertThat(paymentRepository.startPayment(sold, HoldId.of(holdId)))
-                    .isEqualTo(com.railgate.reservation.infra.seat.SeatPaymentOutcome.STARTED);
+                    .isEqualTo(com.railgate.reservation.hold.SeatPaymentOutcome.STARTED);
             expireNow(seats);
 
             // 스위퍼 0 이 후보를 읽은 직후 그 좌석이 확정된다.

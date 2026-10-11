@@ -1,6 +1,7 @@
 package com.railgate.reservation.infra.seat;
 
 import com.railgate.reservation.hold.SeatConfirmationOutcome;
+import com.railgate.reservation.hold.SeatPaymentOutcome;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.railgate.reservation.HoldId;

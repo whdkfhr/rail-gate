@@ -10,7 +10,7 @@ import com.railgate.reservation.UserId;
 import com.railgate.reservation.infra.MySqlTestSupport;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
 import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
-import com.railgate.reservation.infra.seat.SeatPaymentOutcome;
+import com.railgate.reservation.hold.SeatPaymentOutcome;
 import com.railgate.reservation.seat.SeatId;
 import java.time.Duration;
 import java.util.ArrayList;

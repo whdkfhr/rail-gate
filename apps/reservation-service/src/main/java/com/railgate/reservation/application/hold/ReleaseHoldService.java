@@ -54,8 +54,8 @@ import org.springframework.transaction.annotation.Transactional;
  * <h2>이 서비스가 아직 하지 않는 것</h2>
  *
  * <ul>
- *   <li><b>확정·만료 경로의 quota 감소</b> — 여전히 미연동. <b>따라서 I-12 는 아직
- *       운영 활성화 전이다.</b> 선점·해제 두 경로만 연결됐다</li>
+ *   <li><b>I-12 운영 활성화</b> — 확정(Task 2H-C)·만료(Task 2H-D) 경로의 quota 감소는
+ *       각 서비스에 연결됐지만, 만료 스케줄러가 기본 비활성이고(Task 2H-E) backfill 도 수행 전이다</li>
  *   <li><b>REST API</b>(규칙 18 의 204 매핑), <b>멱등키</b>, <b>감사 로그</b>(규칙 32),
  *       <b>메트릭</b>(규칙 35)</li>
  * </ul>
