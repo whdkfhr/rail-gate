@@ -21,7 +21,8 @@ final class Task2iaKeyAcquisition {
 
     /** 확보 결과. */
     sealed interface Result {
-        record Owned(long fence) implements Result { }
+        /** 이 시도가 키를 소유한다. 세대와 fence 를 TX1·TX2 의 모든 기록에 그대로 넘긴다. */
+        record Owned(KeyOwnership ownership) implements Result { }
         record Replay(StoredHoldOutcome outcome) implements Result { }
         record InProgress() implements Result { }
         record Mismatch() implements Result { }
@@ -47,8 +48,9 @@ final class Task2iaKeyAcquisition {
 
     Result acquire(IdempotencyScope scope, String fingerprint) {
         for (int round = 0; round < MAX_ROUNDS; round++) {
-            if (tryInsert(scope, fingerprint)) {
-                return new Result.Owned(1);
+            Optional<KeyOwnership> inserted = tryInsert(scope, fingerprint);
+            if (inserted.isPresent()) {
+                return new Result.Owned(inserted.get());
             }
             Optional<IdempotencyRecord> existing = requiresNew.execute(status -> store.find(scope));
             if (existing == null || existing.isEmpty()) {
@@ -66,24 +68,23 @@ final class Task2iaKeyAcquisition {
                     return new Result.InProgress();
                 }
                 case TAKE_OVER -> {
-                    Boolean taken = requiresNew.execute(
-                            status -> store.takeOver(scope, current.fence(), lease));
-                    if (Boolean.TRUE.equals(taken)) {
-                        return new Result.Owned(current.fence() + 1);
+                    Optional<KeyOwnership> taken = requiresNew.execute(
+                            status -> store.takeOver(scope, current.ownership(), lease));
+                    if (taken != null && taken.isPresent()) {
+                        return new Result.Owned(taken.get());
                     }
-                    // 남이 먼저 인수했거나 그사이 완료됐다. 다시 읽는다.
+                    // 남이 먼저 인수했거나, 그사이 완료됐거나, 삭제·재생성돼 세대가 바뀌었다. 다시 읽는다.
                 }
             }
         }
         return new Result.InProgress();
     }
 
-    private boolean tryInsert(IdempotencyScope scope, String fingerprint) {
+    private Optional<KeyOwnership> tryInsert(IdempotencyScope scope, String fingerprint) {
         try {
-            requiresNew.executeWithoutResult(status -> store.insert(scope, fingerprint, lease));
-            return true;
+            return Optional.ofNullable(requiresNew.execute(status -> store.insert(scope, fingerprint, lease)));
         } catch (DuplicateKeyException alreadyExists) {
-            return false;
+            return Optional.empty();
         }
     }
 }

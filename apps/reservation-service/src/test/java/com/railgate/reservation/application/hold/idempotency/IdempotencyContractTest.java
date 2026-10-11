@@ -123,24 +123,25 @@ class IdempotencyContractTest {
 
         private static final String FP = "a".repeat(64);
         private static final String OTHER_FP = "b".repeat(64);
+        private static final String GENERATION = "00000000-0000-0000-0000-000000000001";
         private static final Succeeded SUCCESS =
                 new Succeeded(HoldId.newId(), new SaleEventId(9L), 2);
 
         @Test
         void 완료된_같은_요청은_재생한다() {
-            var record = new IdempotencyRecord(FP, State.COMPLETED, 1, false, SUCCESS);
+            var record = new IdempotencyRecord(FP, State.COMPLETED, new KeyOwnership(GENERATION, 1), false, SUCCESS);
             assertThat(IdempotencyDecision.decide(record, FP)).isEqualTo(IdempotencyDecision.REPLAY);
         }
 
         @Test
         void 진행_중이고_리스가_살아_있으면_진행_중이다() {
-            var record = new IdempotencyRecord(FP, State.IN_PROGRESS, 1, false, null);
+            var record = new IdempotencyRecord(FP, State.IN_PROGRESS, new KeyOwnership(GENERATION, 1), false, null);
             assertThat(IdempotencyDecision.decide(record, FP)).isEqualTo(IdempotencyDecision.IN_PROGRESS);
         }
 
         @Test
         void 진행_중이고_리스가_만료되면_인수한다() {
-            var record = new IdempotencyRecord(FP, State.IN_PROGRESS, 3, true, null);
+            var record = new IdempotencyRecord(FP, State.IN_PROGRESS, new KeyOwnership(GENERATION, 3), true, null);
             assertThat(IdempotencyDecision.decide(record, FP)).isEqualTo(IdempotencyDecision.TAKE_OVER);
         }
 
@@ -148,9 +149,9 @@ class IdempotencyContractTest {
         @Test
         void 다른_요청은_상태와_무관하게_불일치다() {
             List<IdempotencyRecord> records = List.of(
-                    new IdempotencyRecord(FP, State.COMPLETED, 1, false, SUCCESS),
-                    new IdempotencyRecord(FP, State.IN_PROGRESS, 1, false, null),
-                    new IdempotencyRecord(FP, State.IN_PROGRESS, 1, true, null));
+                    new IdempotencyRecord(FP, State.COMPLETED, new KeyOwnership(GENERATION, 1), false, SUCCESS),
+                    new IdempotencyRecord(FP, State.IN_PROGRESS, new KeyOwnership(GENERATION, 1), false, null),
+                    new IdempotencyRecord(FP, State.IN_PROGRESS, new KeyOwnership(GENERATION, 1), true, null));
             assertThat(records).allSatisfy(record ->
                     assertThat(IdempotencyDecision.decide(record, OTHER_FP))
                             .isEqualTo(IdempotencyDecision.MISMATCH));
@@ -158,9 +159,9 @@ class IdempotencyContractTest {
 
         @Test
         void 완료_상태에만_결과가_있다() {
-            assertThatThrownBy(() -> new IdempotencyRecord(FP, State.IN_PROGRESS, 1, false, SUCCESS))
+            assertThatThrownBy(() -> new IdempotencyRecord(FP, State.IN_PROGRESS, new KeyOwnership(GENERATION, 1), false, SUCCESS))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> new IdempotencyRecord(FP, State.COMPLETED, 1, false, null))
+            assertThatThrownBy(() -> new IdempotencyRecord(FP, State.COMPLETED, new KeyOwnership(GENERATION, 1), false, null))
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }

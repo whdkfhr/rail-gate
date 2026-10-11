@@ -19,7 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <pre>
  *   TX0 키 확보(REQUIRES_NEW)
- *   TX1 본 작업 + 키 행 완료 기록(UPDATE ... WHERE state='IN_PROGRESS' AND fence=:mine)
+ *   TX1 본 작업 + 키 행 완료 기록(UPDATE ... WHERE state='IN_PROGRESS' AND generation=:mine AND fence=:mine)
  *       └ affected=0 이면 리스를 빼앗긴 것 → TX1 전체 롤백 (좌석·quota 변경도 함께 사라진다)
  *   TX2 업무 실패 기록(REQUIRES_NEW, fence 조건부) — TX1 이 롤백된 경우에만 연다
  * </pre>
@@ -30,9 +30,13 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   <li><b>"선점 커밋" ⇔ "키 COMPLETED(성공 결과)"</b> — 같은 트랜잭션의 두 쓰기다. TX1 커밋 직후 죽어도
  *       재요청은 리스 만료를 기다릴 필요 없이 저장된 {@code holdId} 를 재생한다</li>
  *   <li><b>한 키에서 선점을 커밋하는 시도는 많아야 하나다</b> — 커밋하려면 키 행을 {@code IN_PROGRESS → COMPLETED}
- *       로 바꿔야 하고, 그 UPDATE 는 InnoDB 행 잠금으로 직렬화되며 자기 fence 가 현재 fence 일 때만 성공한다.
- *       인수(fence+1)가 먼저 커밋되면 구 작업자의 완료 UPDATE 가 0 이 되어 TX1 이 롤백되고,
+ *       로 바꿔야 하고, 그 UPDATE 는 InnoDB 행 잠금으로 직렬화되며 자기 <b>세대와 fence</b> 가 현재 행의
+ *       세대·fence 와 같을 때만 성공한다.
+ *       인수(같은 세대, fence+1)가 먼저 커밋되면 구 작업자의 완료 UPDATE 가 0 이 되어 TX1 이 롤백되고,
  *       완료가 먼저면 인수 UPDATE 가 {@code state='IN_PROGRESS'} 조건에서 0 이 된다</li>
+ *   <li><b>과거 세대의 작업자는 새 세대의 행을 바꾸지 못한다</b> — 행이 보존 기간 뒤 삭제되고 같은 키로
+ *       다시 만들어지면 새 세대(UUID)가 부여된다. 새 행의 fence 가 다시 1 이어도 세대가 달라 구 작업자의
+ *       완료·포기·인수 UPDATE 가 0 건이다. 성공 기록이 0 건이면 TX1 의 좌석·quota 변경까지 롤백된다</li>
  *   <li><b>재시도 가능한 장애에서 키를 넘겨줘도 안전하다</b> — 커밋 여부가 불확실해도 성공했다면 이미
  *       {@code COMPLETED} 라 포기 UPDATE 가 0 건이고, 실패했다면 상태 변경도 없다</li>
  * </ul>
@@ -61,8 +65,9 @@ final class Task2iaAtomicCompletionIdempotentHold {
 
         private static final long serialVersionUID = 1L;
 
-        FencedOutException(long fence) {
-            super("fence " + fence + " 는 더 이상 키를 소유하지 않는다");
+        FencedOutException(KeyOwnership ownership) {
+            super("세대 " + ownership.generation() + " 의 fence " + ownership.fence()
+                    + " 는 더 이상 키를 소유하지 않는다");
         }
     }
 
@@ -103,7 +108,7 @@ final class Task2iaAtomicCompletionIdempotentHold {
         if (!(acquired instanceof Task2iaKeyAcquisition.Result.Owned owned)) {
             return respondWithoutExecuting(acquired);
         }
-        long fence = owned.fence();
+        KeyOwnership mine = owned.ownership();
         faults.at(Point.AFTER_TX0);
 
         try {
@@ -111,8 +116,8 @@ final class Task2iaAtomicCompletionIdempotentHold {
                 faults.at(Point.TX1_BEFORE_WORK);
                 HoldSeatsResult held = holdSeats.hold(command);
                 // 키 행을 마지막에 잠근다: quota → seat → key.
-                if (store.completeSucceeded(scope, fence, Succeeded.from(held)) != 1) {
-                    throw new FencedOutException(fence);
+                if (store.completeSucceeded(scope, mine, Succeeded.from(held)) != 1) {
+                    throw new FencedOutException(mine);
                 }
                 faults.at(Point.TX1_BEFORE_COMMIT);
                 return held;
@@ -124,9 +129,9 @@ final class Task2iaAtomicCompletionIdempotentHold {
         } catch (RuntimeException failure) {
             Optional<Rejected> rejected = StoredHoldOutcome.rejectionOf(failure);
             if (rejected.isPresent()) {
-                return recordRejection(scope, fence, rejected.get());
+                return recordRejection(scope, mine, rejected.get());
             }
-            abandonQuietly(scope, fence, failure);
+            abandonQuietly(scope, mine, failure);
             throw failure;
         }
     }
@@ -135,11 +140,11 @@ final class Task2iaAtomicCompletionIdempotentHold {
      * TX2. TX1 이 롤백돼 상태 변경이 없다는 것이 확실한 업무 실패만 기록한다.
      * 기록이 0 건이면 그사이 인수자가 생긴 것이다 — <b>늦은 기록이 새 결과를 덮지 않는다.</b>
      */
-    private Task2iaHoldResponse recordRejection(IdempotencyScope scope, long fence, Rejected rejected) {
+    private Task2iaHoldResponse recordRejection(IdempotencyScope scope, KeyOwnership mine, Rejected rejected) {
         faults.at(Point.BEFORE_TX2);
         Integer affected = tx2.execute(status -> {
             faults.at(Point.IN_TX2);
-            return store.completeRejected(scope, fence, rejected);
+            return store.completeRejected(scope, mine, rejected);
         });
         if (affected == null || affected != 1) {
             return new Task2iaHoldResponse.Superseded();
@@ -151,9 +156,9 @@ final class Task2iaAtomicCompletionIdempotentHold {
      * 재시도 가능한 장애 — 결과를 저장하지 않고 리스를 즉시 만료시킨다. 커밋 여부가 불확실해도 안전하다
      * (클래스 주석). 포기 기록마저 실패하면 리스 만료를 기다리게 될 뿐이다.
      */
-    private void abandonQuietly(IdempotencyScope scope, long fence, RuntimeException original) {
+    private void abandonQuietly(IdempotencyScope scope, KeyOwnership mine, RuntimeException original) {
         try {
-            tx2.executeWithoutResult(status -> store.abandon(scope, fence));
+            tx2.executeWithoutResult(status -> store.abandon(scope, mine));
         } catch (RuntimeException abandonFailure) {
             original.addSuppressed(abandonFailure);
         }

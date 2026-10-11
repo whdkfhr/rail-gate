@@ -18,7 +18,10 @@
   - `Task2iaNaiveIdempotentHold` — **규칙 16 그대로**, fence 는 TX2 에서만 (RED 대조군)
   - `Task2iaAtomicCompletionIdempotentHold` — **성공 결과를 TX1 에서 fence 조건부 기록** (선택 후보 B)
   - 두 구현이 공유하는 TX0 `Task2iaKeyAcquisition`, 순수 계약 타입(키·범위·fingerprint·판정·결과)
-- `IdempotencyContractTest` (단위 23개), `HoldIdempotencyFailureWindowTest` (MySQL 20개)
+- `IdempotencyContractTest` (단위 23개), `HoldIdempotencyFailureWindowTest` (MySQL 21개),
+  `IdempotencyKeyGenerationTest` (MySQL 9개 — PR #28 리뷰 P2 보완, §4-1·§5-1)
+- **키 세대(generation)** — 키 행 INSERT 마다 새 UUID 세대를 부여하고, 인수·완료·포기를
+  `키 범위 + generation + fence` 로 검사한다 (`KeyOwnership`). 리뷰 P2 보완
 
 **하지 않은 것** — 운영 migration, 운영 저장소·서비스 코드, HTTP 컨트롤러·헤더 처리, 인증, 응답 직렬화, PG, Redis·Kafka,
 보존 기간 삭제 작업, 메트릭(규칙 35), 해제·확정·결제 시작으로의 범용화.
@@ -38,7 +41,8 @@
 | fingerprint | `SHA-256("hold-seats/v1:" + 정렬한 seatId)`. 순서 정규화, 중복 좌석은 명령 단계 400 |
 | 판정 순서 | 불일치 → 완료(재생) → 진행 중 → 리스 만료(인수) |
 | 저장 | 성공은 TX1, 업무 실패는 TX2, 재시도 가능한 장애는 저장 안 함(리스 즉시 포기) |
-| 보존 | 24시간 **가정**, 리스 30초 **가정**. 삭제 후 보장 없음 |
+| 소유권 | `(generation, fence)`. INSERT 마다 새 세대, 인수는 같은 세대에서 fence + 1. 모든 쓰기가 둘 다 조건으로 확인 |
+| 보존 | 24시간 **가정**, 리스 30초 **가정**. 삭제 후 **재생 보장은 없지만**, 과거 세대 작업자가 새 행을 바꾸는 것은 항상 금지 |
 
 ---
 
@@ -73,6 +77,28 @@ TX0 는 같은 클래스를 쓴다. **차이는 성공 결과를 어느 트랜�
 
 이 결과가 I-18 보장 메커니즘 3("재실행되어도 CAS 가 `affected=0` 이므로 안전")의 반례다. ADR-009 C2.
 
+### §4-1 ★ RED-4 — 키 행 삭제·재생성 뒤 과거 세대 작업자 (PR #28 리뷰 P2)
+
+**선택 구현에서도** 깨졌다. INSERT 가 언제나 fence 1 로 시작하므로, 보존 기간 뒤 삭제된 키가 같은 키로 다시 만들어지면
+새 행도 fence 1 이다. 저장소의 인수·완료·포기는 키 범위와 fence 만 확인했다.
+
+재현 순서 (DB 시각 조정·래치, `Thread.sleep` 없음): A 가 fence 1 확보 → 리스를 DB 시각 기준 과거로 → B 인수(fence 2)·완료
+→ `completed_at` 을 이틀 전으로 옮기고 보존 기간 조건 DELETE → 같은 키로 새 요청이 INSERT(fence 1) → A 재개.
+
+2026-10-11, **수정 전 구현**으로 먼저 실행한 결과 (테스트를 먼저 쓰고 실패를 확인했다):
+
+| 테스트 | 수정 전 관측 |
+|---|---|
+| `IdempotencyKeyGenerationTest` 과거 세대의 실패 기록 (fingerprint 같음·다름) | `completeRejected` 가 **0 건 대신 1 건** — 새 요청의 행이 과거 결과로 `COMPLETED` |
+| 과거 세대의 성공 기록 (같음·다름) | `completeSucceeded` 1 건 |
+| 과거 세대의 포기 (같음·다름) | `abandon` 1 건 — 새 요청의 리스가 즉시 만료 |
+| 삭제 전 스냅숏으로 인수 (같음·다름) | `takeOver` 가 `true` — 재생성된 행을 과거 스냅숏으로 인수 |
+| 같은 세대의 인수·완료 (대조) | 통과 |
+| **합계** | **9개 중 8개 실패** |
+| `HoldIdempotencyFailureWindowTest` §3 키 행이 재생성된 뒤 돌아온 구 작업자 | `Superseded` 기대, 구 작업자가 **`Executed(Succeeded, seatCount=2)`** — 새 요청 C 의 행에 자기 성공을 기록하고 선점을 커밋. (21개 중 이 1개 실패) |
+
+fingerprint 가 같은 경우에도 실패했다. **fingerprint 조건만 추가해서는 같은 요청으로 키를 재사용하는 경우를 막지 못한다.**
+
 ---
 
 ## 5. 선택 구현 검증 — `HoldIdempotencyFailureWindowTest` §2~§5
@@ -86,16 +112,30 @@ TX0 는 같은 클래스를 쓴다. **차이는 성공 결과를 어느 트랜�
 | | **TX1 커밋 직후 중단 + 홀드 해제** (RED-2 와 같은 장애) | 재생만 하고 **다시 선점하지 않음**. 좌석 `AVAILABLE` — 재생은 현재 상태가 아니다 |
 | | TX2 실패 후 재요청 | 키 `IN_PROGRESS`·fence 1, 첫 시도는 아무것도 바꾸지 않음. 리스 동안 `InProgress`, 만료 후 인수해 성공 |
 | | 재시도 가능한 장애(커밋 직전 `CannotAcquireLockException` 주입) | 완료 기록까지 함께 롤백, 리스 즉시 만료, 다음 요청이 바로 인수(fence 2) |
-| §3 리스 인수 (3) | **살아 있는 구 작업자** (RED-3 과 같은 교차) | 구 작업자 `Superseded`, **그의 선점·quota 모두 롤백**, 인수자만 커밋. 재요청은 인수자의 `holdId` |
+| §3 리스 인수 (4) | **살아 있는 구 작업자** (RED-3 과 같은 교차) | 구 작업자 `Superseded`, **그의 선점·quota 모두 롤백**, 인수자만 커밋. 재요청은 인수자의 `holdId` |
 | | 늦은 결과 기록 | 구 작업자의 늦은 `SEAT_UNAVAILABLE` 기록이 fence 2 의 성공 결과를 덮지 않음 |
+| | **키 행 재생성 뒤 돌아온 구 작업자** (RED-4) | 구 작업자 `Superseded`, **그의 선점·quota 모두 롤백**(좌석 AVAILABLE, quota 0). 새 작업자 C 는 정상 완료 — 키 `COMPLETED`·C 의 `holdId`, quota 2 |
 | | 완료 기록을 쥔 TX1 뒤의 요청 | 같은 키 요청이 TX0 중복 검사에서 **잠금을 기다리는 것을 `performance_schema.data_lock_waits` 로 관측**한 뒤 커밋을 풀었고, 그 요청은 인수하지 않고 **재생** |
 | §4 동시성·격리 (5) | 같은 키 32스레드 동시 요청 (래치) | **실행 1회**, `Executed` 1개, 나머지는 `InProgress` 또는 같은 `holdId` 재생, **예외 0건** |
 | | 같은 키·다른 좌석 / 순서만 다름 | 불일치 거부·좌석 미변경 / 같은 `holdId` 재생 |
 | | 진행 중인 키에 다른 요청 | 리스가 만료됐어도 인수하지 않고 불일치, fence 1 그대로 |
 | | 사용자 간 격리 | B 의 같은 키는 A 의 `holdId` 를 받지 않고 자기 결과(`SEAT_UNAVAILABLE`)를 가짐. 행 3개 |
-| | 보존 기간 이후 | 행 삭제 후 같은 키는 새로 실행됨 — **보장 범위는 보존 기간까지** |
+| | 보존 기간 이후 | 행 삭제 후 같은 키는 새로 실행됨 — **재생 보장 범위는 보존 기간까지** |
 | §5 커넥션 (2) | 바깥 트랜잭션 안에서 호출 | 키를 만들기 전에 `IllegalStateException` |
 | | **풀 크기 1** | 성공·재생·업무 실패·TX0 중단 후 인수가 모두 끝남 — TX0/TX1/TX2 가 겹쳐 커넥션 2개를 잡는 순간이 없다 |
+
+### §5-1 키 세대 — `IdempotencyKeyGenerationTest` (9개, 수정 후 모두 통과)
+
+| 테스트 | 확인한 것 |
+|---|---|
+| 과거 세대의 실패 기록 ×2 | 0 건. 새 행은 `IN_PROGRESS`·fence 1·리스 유효·결과 없음 그대로 |
+| 과거 세대의 성공 기록 ×2 | 0 건. 새 행 그대로 |
+| 과거 세대의 포기 ×2 | 0 건. 새 행의 리스가 만료되지 않음 |
+| 삭제 전 스냅숏으로 인수 ×2 | 새 행의 리스까지 만료시켜도 인수 실패 — 리스가 아니라 **세대 불일치**로 막힌다 |
+| 같은 세대의 인수·완료 (대조) | 인수 → (같은 세대, fence 2). 인수당한 fence 1 의 기록은 0 건, fence 2 의 완료는 1 건, 세대는 그대로 |
+
+×2 는 새 요청의 fingerprint 가 같은 경우와 다른 경우다. 매 시나리오에서 새 행의 fence 가 과거 소유권과 같은 1 이고
+세대만 다르다는 것을 함께 단언한다 — fence 만으로는 구별되지 않는 상황을 실제로 만든 것이다.
 
 §5 의 풀 크기 1 실험은 `HoldSeatsService` 를 **직접 `new`** 해서 쓴다. 프록시가 없지만 TX1 의 `TransactionTemplate` 이
 같은 DataSource 에 트랜잭션을 열어 두므로 저장소들이 그 커넥션에 참여하고, quota 저장소의 참여 검사도 통과했다.
@@ -124,8 +164,8 @@ TX0 는 같은 클래스를 쓴다. **차이는 성공 결과를 어느 트랜�
 
 | 층 | 주장 | 근거 |
 |---|---|---|
-| **구조적 논증** | 한 키에서 선점을 커밋하는 시도는 많아야 하나다. TX1 커밋 ⇔ 성공 결과 기록 | 같은 트랜잭션의 두 쓰기 + 키 행 조건부 UPDATE 의 행 잠금 직렬화 ([ADR-009](../adr/ADR-009-idempotency-key.md) §3.1) |
-| **결정적 검증** | RED-1·2·3 의 장애에서 선택 구현은 재생·롤백한다 | 래치·실패 주입으로 순서를 고정한 테스트, 변이 실행 4건 실패 |
+| **구조적 논증** | 한 키에서 선점을 커밋하는 시도는 많아야 하나다. TX1 커밋 ⇔ 성공 결과 기록. 소유권 `(generation, fence)` 는 삭제·재생성을 포함한 키의 전체 수명에서 많아야 한 시도에게만 현재 값이다 | 같은 트랜잭션의 두 쓰기 + 키 행 조건부 UPDATE(`generation`·`fence` 조건)의 행 잠금 직렬화, INSERT 마다 새 세대 ([ADR-009](../adr/ADR-009-idempotency-key.md) §3.1 의 2·5) |
+| **결정적 검증** | RED-1·2·3·4 의 장애에서 선택 구현은 재생·롤백·0 건으로 끝난다 | 래치·실패 주입·DB 시각 조정으로 순서를 고정한 테스트, 변이 실행 4건 실패, RED-4 수정 전 9건 실패 |
 | **통계적 관측** | 같은 키 동시 요청에서 실행 1회·예외 0건 | 32스레드 1회 실행. 반증에 실패한 것이지 증명이 아니다 |
 
 **exactly-once 나 "모든 장애에서 안전" 을 주장하지 않는다.** 아래 §8 이 검증하지 않은 범위다.
@@ -150,7 +190,11 @@ TX0 는 같은 클래스를 쓴다. **차이는 성공 결과를 어느 트랜�
 - **동시성 규모** — 같은 키 32스레드 1회. I-18 의 100회 동시 요청·100회 반복은 하지 않았다
 - **다른 키·다른 사용자가 섞인 대규모 경합**, 키 행 추가로 늘어난 **TX1 길이와 잠금 보유 시간** — 측정하지 않았다
 - **데드락 부재** — §3.2 의 논증과 테스트에서 관측되지 않았을 뿐이다
-- **보존 기간 삭제와 진행 중 행의 경쟁** — 삭제 작업이 없다
+- **보존 기간 삭제와 진행 중 행의 경쟁** — 삭제 작업이 없다. 실험의 삭제는 `COMPLETED` 이면서 보존 기간이 지난 행만 지우는
+  직접 SQL 이다. 삭제 조건이 진행 중 행을 지우는 경우는 다루지 않았다 (세대 검사는 그 경우에도 과거 작업자의 쓰기를 막지만,
+  실행 중인 시도의 결과가 남지 않는다)
+- **UUID 세대 충돌** — 무시할 수 있다는 가정이다. 측정하지 않았다
+- **RED-4 의 조정자 수준 교차는 성공 경로 하나**만 재현했다. 실패 기록·포기·스냅숏 인수는 저장소 수준에서만 확인했다
 - 업무 실패 중 `SALE_EVENT_SCOPE_REJECTED` 를 최종으로 저장하는 것이 맞는지 — 좌석이 삭제·이동되지 않는다는 **가정**에 기댄다
 
 ### 아직 없는 것
@@ -162,7 +206,7 @@ TX0 는 같은 클래스를 쓴다. **차이는 성공 결과를 어느 트랜�
 
 ## 9. 후속 작업 (이번 완료와 구분)
 
-1. **저장소** — ADR-009 결정 후 `reservation-infra` 에 운영 migration(`idempotency_key`)과 JDBC 저장소, 보존 기간 삭제
+1. **저장소** — ADR-009 결정 후 `reservation-infra` 에 운영 migration(`idempotency_key`, `generation` 열 포함)과 JDBC 저장소, 보존 기간 삭제
 2. **애플리케이션 연결** — `HoldSeatsService` 앞단의 TX0/TX1/TX2 조정자와 메트릭
 3. **인증·HTTP 경계** — 인증 주체 `userId`, 헤더 필수(400), 상태 코드(C3), 응답 직렬화
 
@@ -173,6 +217,7 @@ TX0 는 같은 클래스를 쓴다. **차이는 성공 결과를 어느 트랜�
 ```bash
 ./gradlew :apps:reservation-service:test --tests "*.idempotency.IdempotencyContractTest"
 ./gradlew :apps:reservation-service:test --tests "*.idempotency.HoldIdempotencyFailureWindowTest"
+./gradlew :apps:reservation-service:test --tests "*.idempotency.IdempotencyKeyGenerationTest"
 ./gradlew check --rerun-tasks --max-workers=1
 ```
 
@@ -199,3 +244,21 @@ TX0 는 같은 클래스를 쓴다. **차이는 성공 결과를 어느 트랜�
 
 Docker 는 다른 프로젝트 컨테이너 5개가 떠 있는 상태(Docker 메모리 약 2GB, 2 CPU)에서 실행했고 OOM 은 없었다.
 다른 컨테이너를 멈추거나 Docker 자원을 바꾸지 않았다.
+
+### §11-1 PR #28 리뷰 P2 보완 후 (키 세대)
+
+2026-10-11, `./gradlew check --rerun-tasks --max-workers=1` — `BUILD SUCCESSFUL`, 21 tasks executed.
+`verifyArchitectureRules` 포함. `git diff --check` 통과.
+
+| 모듈 | tests | failures | errors | skipped |
+|---|---:|---:|---:|---:|
+| `apps:queue-service` | 1 | 0 | 0 | 0 |
+| `apps:reservation-service` | 238 | 0 | 0 | 0 |
+| `modules:reservation-domain` | 202 | 0 | 0 | 0 |
+| `modules:reservation-infra` | 560 | 0 | 0 | 0 |
+| **합계** | **1001** | **0** | **0** | **0** |
+
+**테스트 수가 바뀐 이유** — 위 기록의 991개에서 +10. `IdempotencyKeyGenerationTest`(9)와
+`HoldIdempotencyFailureWindowTest` §3 의 재생성 시나리오(1)다. 기존 테스트를 지우거나 어서션을 완화하지 않았다.
+기존 테스트는 `fence` 를 `KeyOwnership` 으로 바꾼 API 변경에 맞춰 생성자 인자만 고쳤다(`IdempotencyContractTest` 판정 절).
+RED(§4-1)는 이 기록과 별개로 수정 전 구현에서 실행한 결과다. Docker 조건은 위와 같고 OOM 은 없었다.

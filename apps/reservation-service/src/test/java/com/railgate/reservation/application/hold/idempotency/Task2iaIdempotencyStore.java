@@ -25,10 +25,20 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * <h2>모든 쓰기는 조건부 UPDATE 이고 affected_rows 로 판정한다</h2>
  *
  * <ul>
- *   <li>인수 — {@code state='IN_PROGRESS' AND fence=:seen AND lease_until <= NOW(3)}</li>
- *   <li>완료 기록 — {@code state='IN_PROGRESS' AND fence=:mine}. 0 이면 내가 더 이상 소유자가 아니다</li>
- *   <li>포기(리스 즉시 만료) — {@code state='IN_PROGRESS' AND fence=:mine}</li>
+ *   <li>인수 — {@code state='IN_PROGRESS' AND generation=:seen AND fence=:seen AND lease_until <= NOW(3)}.
+ *       세대는 그대로 두고 fence 만 1 올린다</li>
+ *   <li>완료 기록 — {@code state='IN_PROGRESS' AND generation=:mine AND fence=:mine}.
+ *       0 이면 내가 더 이상 소유자가 아니다</li>
+ *   <li>포기(리스 즉시 만료) — {@code state='IN_PROGRESS' AND generation=:mine AND fence=:mine}</li>
  * </ul>
+ *
+ * <h2>★ 세대(generation)가 필요한 이유 — PR #28 리뷰 P2</h2>
+ *
+ * <p>INSERT 는 언제나 fence 1 로 시작한다. 보존 기간이 지나 행이 삭제되고 같은 키로 다시 만들어지면
+ * 새 행도 fence 1 이다. fence 만 비교하면 <b>과거 세대의 fence 1 작업자가 새 요청의 행에 결과를 기록</b>할 수
+ * 있다. fingerprint 를 조건에 더해도 같은 요청으로 키를 재사용하면 여전히 구별되지 않는다.
+ * 그래서 INSERT 마다 새 {@code generation}(UUID)을 부여하고 모든 소유권 검사에 함께 넣는다.
+ * 검사와 변경은 같은 UPDATE 문장이다 — 앞서 SELECT 로 확인하지 않는다.
  *
  * <p>리스 만료 판정은 전부 DB 의 {@code NOW(3)} 이다 (규칙 7).
  */
@@ -43,6 +53,7 @@ final class Task2iaIdempotencyStore {
                 idempotency_key     VARCHAR(64)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
                 request_fingerprint CHAR(64)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
                 state               VARCHAR(16)  NOT NULL,
+                generation          CHAR(36)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
                 fence               BIGINT       NOT NULL,
                 lease_until         DATETIME(3)  NULL,
                 result_type         VARCHAR(32)  NULL,
@@ -57,12 +68,12 @@ final class Task2iaIdempotencyStore {
 
     private static final String INSERT_SQL = """
             INSERT INTO task2ia_idempotency_key
-                (user_id, operation, idempotency_key, request_fingerprint, state, fence, lease_until)
-            VALUES (?, ?, ?, ?, 'IN_PROGRESS', 1, NOW(3) + INTERVAL ? MICROSECOND)
+                (user_id, operation, idempotency_key, request_fingerprint, state, generation, fence, lease_until)
+            VALUES (?, ?, ?, ?, 'IN_PROGRESS', ?, ?, NOW(3) + INTERVAL ? MICROSECOND)
             """;
 
     private static final String FIND_SQL = """
-            SELECT request_fingerprint, state, fence,
+            SELECT request_fingerprint, state, generation, fence,
                    (lease_until IS NOT NULL AND lease_until <= NOW(3)) AS lease_expired,
                    result_type, hold_id, sale_event_id, seat_count
               FROM task2ia_idempotency_key
@@ -75,6 +86,7 @@ final class Task2iaIdempotencyStore {
                    lease_until = NOW(3) + INTERVAL ? MICROSECOND
              WHERE user_id = ? AND operation = ? AND idempotency_key = ?
                AND state = 'IN_PROGRESS'
+               AND generation = ?
                AND fence = ?
                AND lease_until <= NOW(3)
             """;
@@ -86,6 +98,7 @@ final class Task2iaIdempotencyStore {
                    lease_until = NULL, completed_at = NOW(3)
              WHERE user_id = ? AND operation = ? AND idempotency_key = ?
                AND state = 'IN_PROGRESS'
+               AND generation = ?
                AND fence = ?
             """;
 
@@ -95,6 +108,7 @@ final class Task2iaIdempotencyStore {
                    lease_until = NULL, completed_at = NOW(3)
              WHERE user_id = ? AND operation = ? AND idempotency_key = ?
                AND state = 'IN_PROGRESS'
+               AND generation = ?
                AND fence = ?
             """;
 
@@ -103,6 +117,7 @@ final class Task2iaIdempotencyStore {
                SET lease_until = NOW(3)
              WHERE user_id = ? AND operation = ? AND idempotency_key = ?
                AND state = 'IN_PROGRESS'
+               AND generation = ?
                AND fence = ?
             """;
 
@@ -117,15 +132,17 @@ final class Task2iaIdempotencyStore {
     }
 
     /**
-     * 새 키를 {@code IN_PROGRESS}·fence 1 로 넣는다.
+     * 새 키를 {@code IN_PROGRESS}·<b>새 세대</b>·fence 1 로 넣는다.
      *
      * <p>이미 있으면 {@link DuplicateKeyException} 을 그대로 던진다 — 호출자의 TX0 가 롤백돼야
      * 하므로 여기서 삼키지 않는다. 같은 키를 동시에 넣으면 뒤의 INSERT 는 앞의 TX0 가 끝날 때까지
      * 중복 검사 잠금에서 기다린다. TX0 는 문장 하나라 대기가 짧다.
      */
-    void insert(IdempotencyScope scope, String fingerprint, Duration lease) {
+    KeyOwnership insert(IdempotencyScope scope, String fingerprint, Duration lease) {
+        KeyOwnership owned = KeyOwnership.newGeneration();
         jdbc.update(INSERT_SQL, scope.userId().value(), scope.operation(), scope.key().value(),
-                fingerprint, micros(lease));
+                fingerprint, owned.generation(), owned.fence(), micros(lease));
+        return owned;
     }
 
     Optional<IdempotencyRecord> find(IdempotencyScope scope) {
@@ -134,29 +151,38 @@ final class Task2iaIdempotencyStore {
         return rows.stream().findFirst();
     }
 
-    /** @return 인수했으면 {@code true}. 남이 먼저 인수했거나 완료됐거나 리스가 살아 있으면 {@code false} */
-    boolean takeOver(IdempotencyScope scope, long seenFence, Duration lease) {
-        return jdbc.update(TAKE_OVER_SQL, micros(lease), scope.userId().value(), scope.operation(),
-                scope.key().value(), seenFence) == 1;
+    /**
+     * 스냅숏의 세대·fence 가 그대로이고 리스가 만료됐을 때만 인수한다.
+     *
+     * @return 인수한 소유권(같은 세대, fence + 1). 남이 먼저 인수했거나 완료됐거나 리스가 살아 있거나
+     *         <b>행이 삭제·재생성돼 세대가 달라졌으면</b> 빈 값
+     */
+    Optional<KeyOwnership> takeOver(IdempotencyScope scope, KeyOwnership seen, Duration lease) {
+        int affected = jdbc.update(TAKE_OVER_SQL, micros(lease), scope.userId().value(), scope.operation(),
+                scope.key().value(), seen.generation(), seen.fence());
+        return affected == 1 ? Optional.of(seen.next()) : Optional.empty();
     }
 
-    /** @return 영향 행 수. 1 이 아니면 이 fence 는 더 이상 소유자가 아니다 */
-    int completeSucceeded(IdempotencyScope scope, long fence, Succeeded outcome) {
+    /** @return 영향 행 수. 1 이 아니면 이 소유권은 더 이상 현재 소유자가 아니다 */
+    int completeSucceeded(IdempotencyScope scope, KeyOwnership mine, Succeeded outcome) {
         return jdbc.update(COMPLETE_SUCCEEDED_SQL,
                 outcome.holdId().asString(), outcome.saleEventId().value(), outcome.seatCount(),
-                scope.userId().value(), scope.operation(), scope.key().value(), fence);
+                scope.userId().value(), scope.operation(), scope.key().value(),
+                mine.generation(), mine.fence());
     }
 
-    /** @return 영향 행 수. 1 이 아니면 이 fence 는 더 이상 소유자가 아니다 */
-    int completeRejected(IdempotencyScope scope, long fence, Rejected outcome) {
+    /** @return 영향 행 수. 1 이 아니면 이 소유권은 더 이상 현재 소유자가 아니다 */
+    int completeRejected(IdempotencyScope scope, KeyOwnership mine, Rejected outcome) {
         return jdbc.update(COMPLETE_REJECTED_SQL, outcome.code().name(),
-                scope.userId().value(), scope.operation(), scope.key().value(), fence);
+                scope.userId().value(), scope.operation(), scope.key().value(),
+                mine.generation(), mine.fence());
     }
 
-    /** 리스를 즉시 만료시켜 다음 요청이 바로 인수하게 한다. 완료된 행은 건드리지 않는다. */
-    int abandon(IdempotencyScope scope, long fence) {
+    /** 리스를 즉시 만료시켜 다음 요청이 바로 인수하게 한다. 완료된 행·다른 세대의 행은 건드리지 않는다. */
+    int abandon(IdempotencyScope scope, KeyOwnership mine) {
         return jdbc.update(ABANDON_SQL,
-                scope.userId().value(), scope.operation(), scope.key().value(), fence);
+                scope.userId().value(), scope.operation(), scope.key().value(),
+                mine.generation(), mine.fence());
     }
 
     private static long micros(Duration lease) {
@@ -176,7 +202,8 @@ final class Task2iaIdempotencyStore {
                             new SaleEventId(rs.getLong("sale_event_id")), rs.getInt("seat_count"))
                     : new Rejected(RejectionCode.valueOf(type));
         }
-        return new IdempotencyRecord(rs.getString("request_fingerprint"), state, rs.getLong("fence"),
+        return new IdempotencyRecord(rs.getString("request_fingerprint"), state,
+                new KeyOwnership(rs.getString("generation"), rs.getLong("fence")),
                 rs.getBoolean("lease_expired"), outcome);
     }
 }

@@ -529,6 +529,63 @@ class HoldIdempotencyFailureWindowTest extends MySqlSpringTestSupport {
         }
 
         /**
+         * ★★ PR #28 리뷰 P2 — <b>키 행이 삭제·재생성된 뒤 돌아온 구 작업자</b>는 새 요청의 행을 완료할 수 없다.
+         *
+         * <p>구 작업자 A 가 TX1 진입 직전에 멈춘 사이: 리스 만료 → B 인수·완료 → B 의 홀드 해제 →
+         * 보존 기간 뒤 키 행 삭제 → 같은 키·같은 요청의 새 작업자 C 가 행을 다시 만들고 TX0 직후 멈춘다.
+         * 새 행도 fence 1 이라 fence 만 보면 A 와 C 를 구별할 수 없다.
+         *
+         * <p>A 를 재개하면 A 의 선점은 좌석이 비어 있으므로 성공하지만, 완료 기록이 0 건이어야 TX1 전체
+         * (좌석·quota)가 롤백되고 Superseded 가 된다. 그 뒤 C 가 정상 완료해야 한다.
+         */
+        @Test
+        void 키_행이_재생성된_뒤_돌아온_구_작업자는_새_행을_완료하지_못하고_롤백된다() throws Exception {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            long b = insertAvailableSeat(SCHEDULE, "1B");
+            CountDownLatch oldInTx1 = new CountDownLatch(1);
+            CountDownLatch resumeOld = new CountDownLatch(1);
+            CountDownLatch newOwnsKey = new CountDownLatch(1);
+            CountDownLatch resumeNew = new CountDownLatch(1);
+
+            Future<Task2iaHoldResponse> old = pool.submit(() ->
+                    atomic(pauseAt(Point.TX1_BEFORE_WORK, oldInTx1, resumeOld)).hold(KEY, command(USER_A, a, b)));
+            await(oldInTx1);
+            expireLease(USER_A, KEY);
+            HoldId takerHold = holdIdOf(atomic(Task2iaFaultPoints.NONE).hold(KEY, command(USER_A, a, b)));
+            releaseHold.release(new ReleaseHoldCommand(takerHold, USER_A));
+            jdbc().update("""
+                    UPDATE task2ia_idempotency_key SET completed_at = NOW(3) - INTERVAL 2 DAY
+                     WHERE user_id = ? AND state = 'COMPLETED'
+                    """, USER_A.value());
+            assertThat(jdbc().update("""
+                    DELETE FROM task2ia_idempotency_key
+                     WHERE state = 'COMPLETED' AND completed_at <= NOW(3) - INTERVAL 1 DAY
+                    """)).as("보존 기간이 지난 완료 행 삭제").isEqualTo(1);
+            Future<Task2iaHoldResponse> recreated = pool.submit(() ->
+                    atomic(pauseAt(Point.AFTER_TX0, newOwnsKey, resumeNew)).hold(KEY, command(USER_A, a, b)));
+            await(newOwnsKey);
+            assertThat(keyRow(USER_A, KEY)).containsEntry("fence", 1L).containsEntry("state", "IN_PROGRESS");
+
+            resumeOld.countDown();
+            assertThat(get(old)).as("★ 과거 세대의 작업자").isEqualTo(new Task2iaHoldResponse.Superseded());
+            assertThat(statusOf(a)).as("★ 구 작업자의 선점은 롤백됐다").isEqualTo("AVAILABLE");
+            assertThat(statusOf(b)).isEqualTo("AVAILABLE");
+            assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value())).as("해제 뒤 0 그대로").isZero();
+            assertThat(keyRow(USER_A, KEY)).containsEntry("state", "IN_PROGRESS").containsEntry("fence", 1L);
+
+            resumeNew.countDown();
+            Task2iaHoldResponse fresh = get(recreated);
+            assertThat(fresh).isInstanceOf(Task2iaHoldResponse.Executed.class);
+            HoldId freshHold = holdIdOf(fresh);
+            assertThat(seatHoldId(a)).isEqualTo(freshHold);
+            assertThat(keyRow(USER_A, KEY))
+                    .containsEntry("state", "COMPLETED")
+                    .containsEntry("result_type", "SUCCEEDED")
+                    .containsEntry("hold_id", freshHold.asString());
+            assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value())).isEqualTo(2);
+        }
+
+        /**
          * ★ 완료 기록을 쥔 TX1 이 커밋 전이면 키 행이 X 잠금 상태다. 같은 키의 다른 요청은 TX0 의 중복
          * 검사에서 <b>기다렸다가</b> 커밋된 결과를 재생한다 — 그 사이에 인수할 수 없다.
          */

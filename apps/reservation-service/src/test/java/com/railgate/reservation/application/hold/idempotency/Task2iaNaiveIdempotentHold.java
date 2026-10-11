@@ -91,9 +91,9 @@ final class Task2iaNaiveIdempotentHold {
             faults.at(Point.IN_TX2);
             // fence 를 여기서만 본다. 0 이어도 TX1 은 이미 커밋됐다 — 순진한 구현은 그것을 모른 채 응답한다.
             if (recorded instanceof Succeeded succeeded) {
-                store.completeSucceeded(scope, owned.fence(), succeeded);
+                store.completeSucceeded(scope, owned.ownership(), succeeded);
             } else {
-                store.completeRejected(scope, owned.fence(), (Rejected) recorded);
+                store.completeRejected(scope, owned.ownership(), (Rejected) recorded);
             }
         });
         return new Task2iaHoldResponse.Executed(outcome);
