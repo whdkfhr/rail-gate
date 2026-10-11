@@ -45,7 +45,7 @@ RailGate는 이 가운데 좌석 정합성 문제부터 범위를 좁혀, 단순
 |---|---|---|
 | 사용자별 선점 상한(I-12) | `user_hold_quota` migration(V6)과 조건부 `UPDATE` 저장소, 읽기 전용 drift 탐지 SQL, **선점 유스케이스**([TASK-002H-A](docs/experiments/TASK-002H-A-hold-application-service.md))와 **자발적 해제 유스케이스**([TASK-002H-B](docs/experiments/TASK-002H-B-release-application-service.md))·**단일 좌석 확정 유스케이스**([TASK-002H-C](docs/experiments/TASK-002H-C-confirmation-application-service.md))·**만료 배치 서비스**([TASK-002H-D](docs/experiments/TASK-002H-D-expiry-application-service.md))의 같은 트랜잭션 연동 | 스케줄러 배선, backfill 수행, REST API, 감사 로그·메트릭 — **네 경로가 서비스 수준에서 연결됐지만 부르는 주체가 없어 운영 활성화 전** |
 | 만료 배치 | 사용자 그룹별 실패 격리·재시도·다중 스위퍼·drift 탐지 계약([TASK-002G-F](docs/experiments/TASK-002G-F-expiry-sweeper-operating-contract.md))을 운영 서비스로 구현하고 quota 감소를 연동. 실패 후보를 지나는 키셋 커서 탐색([TASK-002H-D](docs/experiments/TASK-002H-D-expiry-application-service.md))과 **기본 비활성 스케줄러 배선**([TASK-002H-E](docs/experiments/TASK-002H-E-expiry-scheduler.md)) | **운영 활성화**(backfill·drift 점검 선행), 잡 락 도입 판단(측정 후), 손상·실패 그룹 알림 |
-| 애플리케이션 서비스·API | 좌석 선점·자발적 해제·단일 좌석 결제 시작([TASK-002H-F](docs/experiments/TASK-002H-F-start-payment-service.md))·단일 좌석 확정 유스케이스와 만료 배치 서비스, 도메인 포트 7종, JDBC 저장소 배선 완료 | 다좌석 결제 시작·확정, 결제 승인 검증(I-15), REST API, 인증·인가, 멱등키 저장소, 감사 로그·메트릭 |
+| 애플리케이션 서비스·API | 좌석 선점·자발적 해제·단일 좌석 결제 시작([TASK-002H-F](docs/experiments/TASK-002H-F-start-payment-service.md))·단일 좌석 확정 유스케이스와 만료 배치 서비스, 도메인 포트 7종, JDBC 저장소 배선 완료 | 다좌석 결제 시작·확정, 결제 승인 검증(I-15), REST API, 인증·인가, 멱등키 저장소(선점 요청의 계약·장애 구간 실험만 있음 — [TASK-002I-A](docs/experiments/TASK-002I-A-hold-idempotency-contract.md), [ADR-009](docs/adr/ADR-009-idempotency-key.md) 결정 대기), 감사 로그·메트릭 |
 | 대기열 | `queue-service`, `queue-domain`, `queue-token` 모듈 골격만 존재 | Redis 대기열, 입장 토큰 발급·검증, SSE |
 | 결제 | 좌석의 `HELD → PAYING → SOLD` 상태 전이와 단일 좌석 결제 시작·확정 서비스만 구현 (PG 호출·승인 없음) | 결제 승인 모델, Mock PG, 실제 PG 연동, 실패 복구 |
 | 사용자 웹 | 화면·상태·테스트 계약만 문서화 | React 애플리케이션과 E2E 테스트 |
@@ -314,7 +314,7 @@ Testcontainers 통합 테스트 때문에 Docker가 필요합니다. 아직 서�
 아래 항목은 목표 범위이며 현재 구현 완료 항목에 포함하지 않습니다.
 
 1. 기존 데이터 backfill 수행과 만료 배치 스케줄러 운영 활성화 — 네 경로의 서비스 연동과 스케줄러 배선은 완료
-2. REST API와 인증·멱등키 저장소 구성, 결제 승인 검증(I-15) — 단일 좌석 결제 시작 서비스는 완료
+2. REST API와 인증·멱등키 저장소 구성, 결제 승인 검증(I-15) — 단일 좌석 결제 시작 서비스와 선점 멱등성 계약·실험(운영 구현 아님)은 완료
 3. Redis Lua 기반 대기열과 서명된 입장 토큰, SSE 구성
 4. React 사용자 웹과 Playwright 예매 E2E 구현
 5. Mock PG로 결제 실패 복구를 검증한 뒤 실제 PG sandbox 연동
@@ -328,4 +328,6 @@ Testcontainers 통합 테스트 때문에 Docker가 필요합니다. 아직 서�
 - [아키텍처](docs/ARCHITECTURE.md)
 - [사용자 웹 설계](docs/FRONTEND.md)
 - [개발 가이드](docs/DEVELOPMENT_GUIDE.md)
+- [선점 멱등성 계약](docs/IDEMPOTENCY_CONTRACT.md)
+- [ADR](docs/adr)
 - [동시성 실험 기록](docs/experiments)
