@@ -25,6 +25,7 @@ Task 2I-A 에서 테스트 전용 테이블·구현으로 검증한 계약을 **
   - `V7__idempotency_key.sql` — 운영 테이블. 기존 migration 은 수정하지 않았다
   - `JdbcIdempotencyKeyRepository` — 포트 구현
 - 테스트: `JdbcIdempotencyKeyRepositoryTest`(36), `IdempotentHoldTransactionTest`(3)
+  - PR #29 리뷰 보완: `IdempotencyKeySchemaConstraintTest`(22) — §9
 - 문서: CLAUDE.md 규칙 16(C1), INVARIANTS I-18(C2), ADR-009 상태, 계약 문서, README·ARCHITECTURE 구현 상태
 
 **하지 않은 것** — 운영 조정자, 서비스·빈 배선, REST, 인증, 응답 매핑(C3), 리스·보존 수치 확정(C4), 보존 기간 삭제
@@ -208,3 +209,84 @@ Docker 는 다른 프로젝트 컨테이너가 떠 있는 상태에서 실행했
 ./gradlew :modules:reservation-infra:test --tests "*UserHoldQuotaSchemaMigrationTest"
 ./gradlew check --rerun-tasks --max-workers=1
 ```
+
+---
+
+## 9. PR #29 리뷰 보완 — `ck_idempotency_key_shape` 의 NULL 우회 (2026-10-12)
+
+§6 의 기록(1040개)은 보완 전 실행 결과이며 그대로 둔다. 아래는 이번 보완의 기록이다.
+
+### 원인
+
+MySQL 의 CHECK 는 식이 **FALSE 일 때만** 위반이다. NULL 열과의 비교(`=`, `IN`, `>=`)는 UNKNOWN 이고 UNKNOWN 은 통과한다.
+보완 전 완료 분기는 `result_type = 'SUCCEEDED' ...` 와 `result_type IN (...)` 를 OR 로 묶었고 성공 분기는 `seat_count >= 1`
+만 요구했다. 그래서
+
+- **A** — `COMPLETED`, 리스 NULL, `completed_at = NOW(3)`, `result_type` NULL, 성공 필드 모두 NULL → 두 결과 분기가 모두 UNKNOWN → 통과
+- **B** — `SUCCEEDED`, `hold_id`·`sale_event_id` 정상, `seat_count` NULL → 성공 분기 UNKNOWN, 실패 분기 FALSE → 통과
+
+두 행이 실제 MySQL 에 들어갔고, 이후 `JdbcIdempotencyKeyRepository.find()` 의 결과 복원이 실패한다. 저장소는 이런 행을
+쓰지 않지만, CHECK 는 **저장소를 거치지 않은 쓰기**를 막는 최후의 방어선이라 여기서 막아야 한다.
+
+### 해결
+
+완료 분기에 `result_type IS NOT NULL`, 성공 분기에 `seat_count IS NOT NULL` 을 추가했다. 그러면 비교 대상이 NULL 일 수 있는
+열(`result_type`, `seat_count`)은 비교 전에 반드시 NULL 이 아니므로 식의 모든 원자 술어가 TRUE/FALSE 로만 평가된다.
+`state` 와 `fence` 는 `NOT NULL` 열이고, 나머지 nullable 열은 `IS [NOT] NULL` 로만 검사하므로 UNKNOWN 을 만들지 않는다.
+Java 값 객체의 검증을 강화하는 것으로 대체하지 않았다 — 직접 SQL 은 그것을 거치지 않는다.
+
+### Migration 처리 — 신규 V7 을 직접 수정했다
+
+후속 migration(V8)이 아니라 **이번 PR 의 V7 을 고쳤다.** 근거:
+
+- V7 은 `origin/main` 에 없다 — PR #29 브랜치(`codex/task-002i-b-idempotency-store`)에만 있고 PR 은 미머지
+- 저장소에 `docker-compose` 등 영속 DB 구성이 없고, `application.yml` 에 datasource URL 이 없다 (테스트가 주입)
+- 이 머신에 railgate 컨테이너·볼륨이 없고, 로컬 Homebrew MySQL 은 꺼져 있으며 데이터 디렉터리에 railgate 스키마가 없다
+- 따라서 V7 이 적용된 곳은 테스트마다 새로 만드는 Testcontainers DB 뿐이다
+
+이 판단은 **이 머신과 저장소에서 확인한 범위**에 기댄다. 다른 개발자나 환경이 이 브랜치를 영속 DB 에 적용했다면 checksum 이
+달라 Flyway 검증이 실패한다 — 그 경우 `flyway repair` 로 덮지 말고 V7 을 되돌린 뒤 V8 로 보강해야 한다.
+`flyway repair`·데이터 삭제·초기화는 하지 않았다. 기존 불량 행을 보정할 대상도 없다(적용된 영속 환경이 없다).
+
+### TDD 기록
+
+새 테스트 `IdempotencyKeySchemaConstraintTest` (22개, MySQL 8.4 Testcontainers + Flyway V1~V7). 거부는 **MySQL 오류 코드 3819 와
+`Check constraint 'ck_idempotency_key_shape' is violated`** 로 확인해, NOT NULL 이나 다른 제약이 아니라 의도한 CHECK 가 거부한 것을 검증한다.
+
+| 단계 | 대상 | 결과 |
+|---|---|---|
+| RED | 보완 전 V7 | **22개 중 8개 실패** — A, B, "결과 종류만 NULL 이고 성공 필드는 있음", UPDATE 5종. 모두 "CHECK 가 거부해야 한다 — 통과했다면 UNKNOWN 으로 우회된 것" 어서션 |
+| GREEN | 보완한 V7 | **22개 모두 통과** |
+
+| 절 | 확인한 것 |
+|---|---|
+| §1 INSERT (11) | A·B, 결과 종류만 NULL(성공 필드 있음 / 좌석 수만 있음), 성공인데 회차 NULL·성공 필드 모두 NULL·좌석 수 0, 완료 시각 NULL, 진행 중인데 리스 NULL·좌석 수 있음, 업무 실패인데 좌석 수 있음 → 모두 거부, 행 0 |
+| §2 UPDATE (5) | 진행 중 → 결과 종류 없는 완료, 진행 중 → 좌석 수 없는 성공, 성공 행의 좌석 수 NULL, 업무 실패 행·성공 행의 결과 종류 NULL → 모두 거부, 행 불변 |
+| §3 정상 행 (6) | 진행 중, 성공, 업무 실패 3종이 직접 INSERT 로 허용되고 `find()` 가 그대로 복원. 업무 실패 종류가 3개임을 고정 |
+
+RED 에서 통과한 14개는 보완 전에도 이미 FALSE 로 평가되던 조합(예: `hold_id IS NOT NULL` 이 거짓)과 정상 행이다.
+회귀 방지용으로 남겼다.
+
+### 검증
+
+- 관련 테스트 — `IdempotencyKeySchemaConstraintTest`(22), `JdbcIdempotencyKeyRepositoryTest`(36),
+  `IdempotentHoldTransactionTest`(3), `*SchemaMigrationTest` 전부 통과. 정상 저장·조회·결과 복원 테스트는 바꾸지 않았다
+- 2026-10-12, `./gradlew check --rerun-tasks --max-workers=1` — `BUILD SUCCESSFUL`, 21 tasks executed,
+  `verifyArchitectureRules` 포함. `git diff --check` 통과
+
+| 모듈 | tests | failures | errors | skipped |
+|---|---:|---:|---:|---:|
+| `apps:queue-service` | 1 | 0 | 0 | 0 |
+| `apps:reservation-service` | 238 | 0 | 0 | 0 |
+| `modules:reservation-domain` | 202 | 0 | 0 | 0 |
+| `modules:reservation-infra` | 621 | 0 | 0 | 0 |
+| **합계** | **1062** | **0** | **0** | **0** |
+
+**테스트 수가 바뀐 이유** — §6 의 1040개에서 +22. 전부 신규 `IdempotencyKeySchemaConstraintTest` 다. 기존 테스트를 지우거나 제외하지 않았다.
+Docker 는 다른 프로젝트 컨테이너가 떠 있는 상태에서 실행했고 OOM 은 없었다. 다른 컨테이너나 Docker 설정을 바꾸지 않았다.
+
+### 이번 보완이 하지 않은 것
+
+- 운영 조정자·서비스 배선·REST·인증·삭제 스케줄러 — 여전히 없다. **저장소와 스키마가 단단해져도 요청 경로의 I-18 이 완성된 것은 아니다**
+- 소유권·트랜잭션 계약 변경 — 없다
+- `sale_event_id`·`hold_id` 의 값 범위(양수, UUID 형식)는 CHECK 로 검사하지 않는다. NULL 여부만 본다

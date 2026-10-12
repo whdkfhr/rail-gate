@@ -64,6 +64,11 @@ CREATE TABLE idempotency_key
             OR result_type IN ('SUCCEEDED', 'SEAT_UNAVAILABLE', 'QUOTA_EXCEEDED', 'SALE_EVENT_SCOPE_REJECTED')),
 
     -- ★ 상태와 결과 필드의 일관성. 저장소를 거치지 않은 쓰기도 어긋난 행을 만들 수 없게 하는 최후의 방어선.
+    --
+    -- ★ CHECK 는 식이 FALSE 일 때만 위반이다. NULL 열과의 비교(=, IN, >=)는 UNKNOWN 이 되고 UNKNOWN 은 통과한다.
+    --   그래서 비교 대상이 NULL 일 수 있는 열은 비교하기 전에 IS NOT NULL 을 먼저 요구한다.
+    --   이것이 빠지면 result_type 이 NULL 인 완료 행, seat_count 가 NULL 인 성공 행이 들어간다
+    --   (PR #29 리뷰, TASK-002I-B §9). 결과적으로 식의 모든 원자 술어가 TRUE/FALSE 로만 평가된다.
     CONSTRAINT ck_idempotency_key_shape
         CHECK (
             (state = 'IN_PROGRESS'
@@ -74,9 +79,11 @@ CREATE TABLE idempotency_key
             (state = 'COMPLETED'
                 AND lease_until IS NULL
                 AND completed_at IS NOT NULL
+                AND result_type IS NOT NULL
                 AND (
                     (result_type = 'SUCCEEDED'
-                        AND hold_id IS NOT NULL AND sale_event_id IS NOT NULL AND seat_count >= 1)
+                        AND hold_id IS NOT NULL AND sale_event_id IS NOT NULL
+                        AND seat_count IS NOT NULL AND seat_count >= 1)
                     OR
                     (result_type IN ('SEAT_UNAVAILABLE', 'QUOTA_EXCEEDED', 'SALE_EVENT_SCOPE_REJECTED')
                         AND hold_id IS NULL AND sale_event_id IS NULL AND seat_count IS NULL)
