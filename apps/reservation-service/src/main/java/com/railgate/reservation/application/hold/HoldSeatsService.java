@@ -85,9 +85,11 @@ public class HoldSeatsService {
      * 좌석을 선점한다. quota 확보와 좌석 선점이 <b>하나의 트랜잭션</b>으로 묶인다.
      *
      * <p>{@code @Transactional} 이 붙어 있으므로 <b>Spring 프록시를 통해</b> 호출해야
-     * 경계가 열린다. 직접 {@code new} 로 만든 인스턴스에는 경계가 없고, 그 경우
-     * 저장소들의 참여 검사가 {@link IllegalStateException} 으로 거부한다 —
-     * 조용히 autocommit 되지 않는다.
+     * 이 메서드가 스스로 경계를 연다. 직접 {@code new} 로 만든 인스턴스는 경계를 열지 않는다.
+     * 그때 결과는 <b>바깥 트랜잭션 유무</b>로 갈린다 — 같은 DataSource 의 Spring 트랜잭션이
+     * 이미 있으면 저장소가 바인딩된 커넥션을 써서 그 트랜잭션에 참여하고, 없으면 quota 저장소의
+     * 참여 검사가 SQL 전에 {@link IllegalStateException} 으로 거부한다 (조용히 autocommit 되지 않는다).
+     * 검사가 보는 것은 프록시 유무가 아니라 실제 트랜잭션 참여 여부다.
      *
      * @throws SaleEventScopeException  좌석이 존재하지 않거나 서로 다른 회차에 걸쳐 있는 경우
      * @throws QuotaExceededException   1인당 상한(4석)을 넘는 경우
