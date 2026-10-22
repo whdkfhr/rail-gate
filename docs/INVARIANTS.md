@@ -222,10 +222,12 @@
 
 ### I-18. 동일 멱등키의 요청은 상태를 한 번만 변경하고, 이후 요청은 최초 결과를 반환한다
 
-> **현재 상태 — 선점 요청에 대해 ADR-009 C1·C2 채택 (Task 2I-B). 저장소만 있고 요청 경로는 아직 연결되지 않았다.**
-> 운영 테이블(V7 `idempotency_key`)과 JDBC 저장소(`JdbcIdempotencyKeyRepository`)가 생겼다
-> ([TASK-002I-B](experiments/TASK-002I-B-idempotency-store.md)). **TX0/TX1/TX2 조정자·REST·인증이 없으므로 I-18 은
-> 요청 경로에서 아직 강제되지 않는다.** 아래 메커니즘은 저장소가 불려졌을 때의 보장이다.
+> **현재 상태 — 선점 요청에 대해 ADR-009 C1·C2 채택 (Task 2I-B). 서비스 수준까지 연결됐고 HTTP 요청 경로는 아직이다.**
+> 운영 테이블(V7 `idempotency_key`)과 JDBC 저장소(`JdbcIdempotencyKeyRepository`)
+> ([TASK-002I-B](experiments/TASK-002I-B-idempotency-store.md)), 그리고 TX0/TX1/TX2 조정자 `IdempotentHoldService` 와
+> 그 빈 배선([TASK-002I-C](experiments/TASK-002I-C-idempotent-hold-service.md))이 있다.
+> **REST·`Idempotency-Key` 헤더·인증이 없으므로 I-18 은 HTTP 요청 경로에서 아직 강제되지 않는다.** 아래 메커니즘은
+> 조정자가 불려졌을 때의 보장이다. 사용자 id 는 아직 명령에서 오며 인증된 주체와 대조하지 않는다.
 
 - **보장 메커니즘** — 4단계.
   1. `idempotency_key` 테이블 PK `(사용자, 연산, 클라이언트 키)` 로 중복 감지

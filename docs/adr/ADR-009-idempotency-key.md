@@ -10,9 +10,10 @@
 >
 > 적용 범위는 **선점 요청(`HoldSeatsService`) 하나**다. 해제·확정·결제 시작으로 일반화하지 않았다.
 >
-> **현재 상태** (2026-10-12) — 운영 migration `V7__idempotency_key.sql` 과 운영 저장소 `JdbcIdempotencyKeyRepository`
-> 는 있다 ([TASK-002I-B](../experiments/TASK-002I-B-idempotency-store.md)). **운영 조정자(TX0/TX1/TX2 를 묶는 코드),
-> 서비스 배선, HTTP, 인증은 없다.** 따라서 저장소가 있어도 실제 요청 경로에서 I-18 이 완성된 것은 아니다.
+> **현재 상태** (2026-10-22) — 운영 migration `V7__idempotency_key.sql` 과 운영 저장소 `JdbcIdempotencyKeyRepository`
+> ([TASK-002I-B](../experiments/TASK-002I-B-idempotency-store.md)), 그리고 **서비스 수준 조정자 `IdempotentHoldService`
+> 와 그 빈 배선**([TASK-002I-C](../experiments/TASK-002I-C-idempotent-hold-service.md))이 있다. **HTTP 진입점·인증·응답
+> 직렬화는 없다.** 조정자를 부르는 요청 경로가 없으므로 실제 HTTP 요청에서 I-18 이 완성된 것은 아니다.
 > C1·C2 는 채택돼 CLAUDE.md 규칙 16 과 I-18 에 반영됐고, C3·C4 는 미결정이다 (§5).
 >
 > §1·§2 와 §5 의 "원래 제안" 표는 **채택 전(Task 2I-A) 배경**이다. 거기 인용한 규칙 16·I-18 문구는 당시의 것이며
@@ -164,6 +165,7 @@ Task 2I-A 에서는 규칙과 불변식을 바꾸지 않았다. **Task 2I-B 에�
    지난 행만 지우고 `IN_PROGRESS` 행은 지우지 않는 정리 계약으로 한다.
    PR #29 리뷰에서 V7 의 `ck_idempotency_key_shape` 가 NULL 비교(UNKNOWN)로 우회되는 것이 드러나, 미배포인 V7 을 직접
    고쳤다 (TASK-002I-B §9)
-2. **애플리케이션 연결** — `HoldSeatsService` 앞단의 TX0/TX1/TX2 조정자, Micrometer 메트릭(재생·진행 중·불일치·인수·fence 거절)
+2. ~~**애플리케이션 연결** — `HoldSeatsService` 앞단의 TX0/TX1/TX2 조정자, Micrometer 메트릭(재생·진행 중·불일치·인수·fence 거절)~~ —
+   **완료** (Task 2I-C, `IdempotentHoldService`). 서비스 수준 연결이며 HTTP 진입점은 3 이다
 3. **인증·HTTP 경계** — 인증 주체에서 `userId`, `Idempotency-Key` 필수(누락 400), 상태 코드 매핑(C3), 응답 본문 직렬화
 4. 해제·확정·결제 시작에 같은 계약을 **각각** 적용할지 판단 — 이번에 범용화하지 않았다
