@@ -88,14 +88,23 @@ hold(key, command)
 | 이름 | 태그 | 의미 |
 |---|---|---|
 | `railgate.idempotency.hold.calls` | `result` = `executed`·`replayed`·`in_progress`·`mismatch`·`ownership_lost`·`failed` | 호출의 최종 결과 |
-| `railgate.idempotency.hold.attempts` | — | **본 작업 실행 시도**(TX1 진입) |
-| `railgate.idempotency.hold.committed` | `outcome` = `succeeded`·`seat_unavailable`·`quota_exceeded`·`sale_event_scope_rejected` | **결과가 실제로 커밋된 수** |
+| `railgate.idempotency.hold.attempts` | — | TX1 을 열기 직전에 증가하는 **본 작업 실행 시도** 수 |
+| `railgate.idempotency.hold.committed` | `outcome` = `succeeded`·`seat_unavailable`·`quota_exceeded`·`sale_event_scope_rejected` | 성공 결과(TX1) 또는 업무 실패 결과(TX2)의 기록 트랜잭션이 **정상 반환돼 조정자가 커밋 완료를 확인한** 수 |
 | `railgate.idempotency.hold.takeovers` | — | 리스 만료 행 인수 성공 |
 | `railgate.idempotency.hold.not_owner` | `write` = `succeeded`·`rejected`·`takeover` | 소유권 조건부 쓰기의 거절 |
 | `railgate.idempotency.hold.abandons` | `outcome` = `applied`·`not_owner`·`failed` | 장애 뒤 리스 포기 |
 
-`attempts − committed` 가 롤백(소유권 상실·장애)이다. 커밋 결과 불명이었는데 실제로 커밋된 경우는 `committed` 에 잡히지
-않고 `abandons{outcome=not_owner}` 로 드러난다. **태그는 고정 집합의 값만 쓴다** — 사용자 id·멱등키·holdId 는 태그에도
+**`committed` 는 DB 에 실제로 반영된 커밋을 모두 세지 않는다.** 커밋이 반영된 뒤 실패로 보고되면(커밋 결과 불명) 증가하지 않는다.
+그래서 **`attempts − committed` 는 TX1 롤백 수가 아니다.**
+
+| 사례 | attempts | committed | 차이 | 실제 TX1 |
+|---|---:|---:|---:|---|
+| 업무 실패 — TX1 롤백 + TX2 기록 성공 | 1 | 1 | 0 | 롤백됨 |
+| TX1 이 실제 커밋됐으나 호출자에게 실패로 보고됨 | 1 | 0 | 1 | 커밋됨 |
+
+`abandons{outcome=not_owner}` 도 커밋 성공을 확정하는 지표가 아니다. 포기 시점에 이 소유권(세대·fence)으로 바꿀 진행 중 행이
+없었다는 뜻일 뿐이며, 이미 완료된 경우(커밋 결과 불명이었지만 실제로 커밋됨)와 다른 작업자가 리스를 인수한 경우를 구분하지 않는다.
+실제 결과는 키 행을 조회해야 알 수 있다. **태그는 고정 집합의 값만 쓴다** — 사용자 id·멱등키·holdId 는 태그에도
 로그에도 남기지 않는다(단위 테스트로 확인). 로그는 소유권 상실과 포기 실패의 WARN 두 개뿐이며 식별값이 없다.
 
 ---

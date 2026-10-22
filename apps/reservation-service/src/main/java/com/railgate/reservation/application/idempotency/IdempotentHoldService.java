@@ -67,8 +67,20 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <h2>메트릭 (규칙 35)</h2>
  *
  * <p>태그는 고정 집합의 값만 쓴다. 사용자 id·멱등키·holdId 같은 고유값은 태그에도 로그에도 남기지 않는다.
- * <b>{@value #ATTEMPTS} 는 본 작업 실행 시도</b>(TX1 진입)이고, <b>{@value #COMMITTED} 는 결과가 실제로 커밋된 수</b>다.
- * 둘의 차이가 롤백(소유권 상실·장애)이다.
+ *
+ * <ul>
+ *   <li><b>{@value #ATTEMPTS}</b> — TX1 을 열기 직전에 증가하는 <b>본 작업 실행 시도</b> 수</li>
+ *   <li><b>{@value #COMMITTED}</b> — 성공 결과(TX1) 또는 업무 실패 결과(TX2)의 기록 트랜잭션이 <b>정상 반환돼 조정자가
+ *       커밋 완료를 확인한</b> 수. DB 에 실제로 반영된 커밋을 모두 세지는 않는다 — 커밋이 반영된 뒤 실패로 보고되면
+ *       증가하지 않는다</li>
+ * </ul>
+ *
+ * <p><b>{@code attempts − committed} 는 TX1 롤백 수가 아니다.</b> 업무 실패는 TX1 이 롤백되고 TX2 기록이 성공해
+ * {@code attempts=1, committed=1}(차이 0)이고, TX1 이 실제로 커밋됐는데 호출자에게 실패로 보고되면
+ * {@code attempts=1, committed=0}(차이 1)이다.
+ *
+ * <p>{@value #ABANDONS}{@code {outcome=not_owner}} 도 커밋 성공을 확정하지 않는다. 포기 시점에 이 소유권으로 바꿀
+ * 진행 중 행이 없었다는 뜻일 뿐이며, 이미 완료된 경우와 다른 작업자가 인수한 경우를 구분하지 않는다.
  */
 public class IdempotentHoldService {
 
