@@ -67,11 +67,11 @@ class ReservationServiceApplicationTest extends MySqlSpringTestSupport {
                 .isEqualTo(3);
     }
 
-    /** Flyway 가 앱 컨텍스트에서 실제로 돌아 V6 까지 적용됐는지 확인한다. */
+    /** Flyway 가 앱 컨텍스트에서 실제로 돌아 V7(idempotency_key)까지 적용됐는지 확인한다. */
     @Test
-    void 마이그레이션이_V6_까지_적용된다() {
+    void 마이그레이션이_V7_까지_적용된다() {
         assertThat(jdbc().queryForList(
                 "SELECT version FROM flyway_schema_history WHERE success = 1", String.class))
-                .contains("1", "4", "5", "6");
+                .contains("1", "4", "5", "6", "7");
     }
 }

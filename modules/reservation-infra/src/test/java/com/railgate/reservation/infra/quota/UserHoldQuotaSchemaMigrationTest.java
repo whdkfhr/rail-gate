@@ -99,6 +99,14 @@ class UserHoldQuotaSchemaMigrationTest extends MySqlTestSupport {
         configuration.load().migrate();
     }
 
+    private java.util.List<String> appliedVersions() {
+        return java.util.Arrays.stream(Flyway.configure().dataSource(schemaDataSource)
+                        .locations("classpath:db/migration").load()
+                        .info().applied())
+                .map(info -> info.getVersion().getVersion())
+                .toList();
+    }
+
     private String currentVersion() {
         return Flyway.configure().dataSource(schemaDataSource)
                 .locations("classpath:db/migration").load()
@@ -133,7 +141,8 @@ class UserHoldQuotaSchemaMigrationTest extends MySqlTestSupport {
         void 빈_스키마에서_V6_까지_적용된다() {
             assertThatCode(() -> migrateTo(null)).doesNotThrowAnyException();
 
-            assertThat(currentVersion()).isEqualTo("6");
+            assertThat(currentVersion()).as("최신 스키마(V7 idempotency_key 포함)까지").isEqualTo("7");
+            assertThat(appliedVersions()).contains("6");
             assertThat(schemaJdbc.queryForObject(
                     "SELECT COUNT(*) FROM user_hold_quota", Long.class))
                     .as("카운터는 비어 있는 채로 시작한다")
@@ -254,7 +263,8 @@ class UserHoldQuotaSchemaMigrationTest extends MySqlTestSupport {
 
             assertThatCode(() -> migrateTo(null)).doesNotThrowAnyException();
 
-            assertThat(currentVersion()).isEqualTo("6");
+            assertThat(currentVersion()).as("최신 스키마(V7 idempotency_key 포함)까지").isEqualTo("7");
+            assertThat(appliedVersions()).contains("6");
             assertThat(schemaJdbc.queryForObject(
                     "SELECT COUNT(*) FROM seat_inventory", Long.class))
                     .as("좌석을 건드리지 않는다")
