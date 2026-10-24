@@ -1,6 +1,6 @@
 # RailGate — 선점 요청 멱등성 계약
 
-> 상태: **선점 요청 계약 채택** (2026-10-12, Task 2I-B — [ADR-009](adr/ADR-009-idempotency-key.md) C1·C2 채택, C3·C4 미결정). 초안 2026-10-11 (Task 2I-A).
+> 상태: **선점 요청 계약 채택** (2026-10-12, Task 2I-B — [ADR-009](adr/ADR-009-idempotency-key.md) C1·C2 채택, C4 미결정) · **C3 채택** (2026-10-25, Task 2J-A). 초안 2026-10-11 (Task 2I-A).
 >
 > 적용 대상은 **좌석 선점(`HoldSeatsService.hold`) 하나**다. 해제·확정·결제 시작은 이 문서의 범위가 아니다.
 >
@@ -10,7 +10,8 @@
 >   §2 fingerprint 계산, §3 판정 순서, §4 결과 분류, §5 TX0/TX1/TX2 경계, 리스 설정(`railgate.idempotency.hold.lease`),
 >   메트릭, Spring 빈 배선 ([TASK-002I-C](experiments/TASK-002I-C-idempotent-hold-service.md)).
 >   장애 구간 실험은 테스트 전용 구현으로 했다 ([TASK-002I-A](experiments/TASK-002I-A-hold-idempotency-contract.md)).
-> - **없음** — HTTP 진입점·`Idempotency-Key` 헤더 처리, 인증, 응답 직렬화·상태 코드(§7, C3), 보존 기간 삭제 작업.
+> - **없음** — HTTP 진입점·`Idempotency-Key` 헤더 처리, 인증, 응답 직렬화, 보존 기간 삭제 작업. 상태 코드 매핑(C3)은
+>   [HOLD_HTTP_CONTRACT.md](HOLD_HTTP_CONTRACT.md) 에 **설계만** 확정했다.
 >   **조정자를 부르는 HTTP 요청 경로가 없다** — 서비스 수준 연결이지 요청 경로의 완성이 아니다. 사용자 id 는 아직
 >   선점 명령에서 오며 인증된 주체와 대조하지 않는다. 아래의 "사용자 식별" 과 "응답" 절은 계약일 뿐 구현이 아니다.
 
@@ -134,6 +135,10 @@ TX2 (REQUIRES_NEW)  업무 실패 기록 또는 리스 포기 (세대·fence 조
 ---
 
 ## 7. 응답 (계약만 — HTTP 계층 미구현)
+
+> **현행 HTTP 계약은 [HOLD_HTTP_CONTRACT.md](HOLD_HTTP_CONTRACT.md) §6 이다** (Task 2J-A, C3 채택). 아래 표는 Task 2I-A·B 시점의
+> 제안으로 보존한다. 달라진 점: 진행 중·소유권 상실 = `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`, 회차 해석 거부 = `422`,
+> 재시도 가능한 장애 = `503`, 그 외 = `500`. 재생과 traceId 는 같은 문서 §7.3 D1 결정 대기.
 
 | 상황 | 제안 | 비고 |
 |---|---|---|

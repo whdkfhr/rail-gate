@@ -596,9 +596,10 @@ rg:{evt:E1:s0}:waiting ... rg:{evt:E1:s15}:waiting   (16 샤드)
 | ADR-006 | 서비스 간 통신을 토큰 서명 검증으로 대체한 이유 |
 | ADR-007 | 좌석 선점을 동기로 유지하는 이유 |
 | ADR-008 | Transactional Outbox 를 채택한 이유 |
-| [ADR-009](adr/ADR-009-idempotency-key.md) | 멱등성 키 설계 (리스 방식, 3단 트랜잭션 경계) — **선점에 C1·C2 채택, C3·C4 미결정** (Task 2I-A·2I-B) |
+| [ADR-009](adr/ADR-009-idempotency-key.md) | 멱등성 키 설계 (리스 방식, 3단 트랜잭션 경계) — **선점에 C1·C2·C3 채택, C4 미결정** (Task 2I-A·2I-B·2J-A) |
 | ADR-010 | 결제를 authorize/capture 2단계로 나눈 이유 |
 | ADR-011 | Redis 장애 시 fail-closed 정책 |
 | ADR-012 | Kafka 토픽을 생애주기 단위로 통합한 이유 |
 | ADR-013 | 부하 테스트 도구로 k6 를 선택한 이유 |
 | ADR-014 | 대기열 샤딩 전략과 공정성 트레이드오프 |
+| [ADR-015](adr/ADR-015-login-and-admission-tokens.md) | 로그인 액세스 토큰과 입장 토큰의 분리 — **제안** (Task 2J-A, 구현 없음) |
