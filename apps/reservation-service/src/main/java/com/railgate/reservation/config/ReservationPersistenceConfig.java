@@ -6,6 +6,8 @@ import com.railgate.reservation.hold.SeatConfirmationPort;
 import com.railgate.reservation.hold.SeatHoldPort;
 import com.railgate.reservation.hold.SeatPaymentPort;
 import com.railgate.reservation.hold.SeatReleasePort;
+import com.railgate.reservation.idempotency.IdempotencyKeyPort;
+import com.railgate.reservation.infra.idempotency.JdbcIdempotencyKeyRepository;
 import com.railgate.reservation.infra.quota.JdbcUserHoldQuotaRepository;
 import com.railgate.reservation.infra.saleevent.JdbcSaleEventScopeRepository;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
@@ -123,6 +125,15 @@ public class ReservationPersistenceConfig {
     @Bean
     public JdbcSeatPaymentRepository seatPaymentRepository(DataSource dataSource) {
         return new JdbcSeatPaymentRepository(dataSource, PAYMENT_DURATION);
+    }
+
+    /**
+     * 선점 요청 멱등키 저장소 (Task 2I-B 구현, Task 2I-C 배선). 같은 {@code dataSource} 를 받으므로 조정자의 TX1 에서
+     * 선점과 <b>같은 커넥션</b>으로 성공 결과를 기록한다 — 선점 커밋과 결과 기록이 원자적인 근거다.
+     */
+    @Bean
+    public IdempotencyKeyPort idempotencyKeyPort(DataSource dataSource) {
+        return new JdbcIdempotencyKeyRepository(dataSource);
     }
 
     /** 만료 후보 조회와 회수 (Task 2H-D). 그룹 트랜잭션은 {@code ExpireHoldsService} 가 소유한다. */

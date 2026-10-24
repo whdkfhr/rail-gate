@@ -6,10 +6,13 @@
 >
 > ★ **구현 상태**
 > - **있음** — 운영 테이블 V7 `idempotency_key` 와 저장소 `JdbcIdempotencyKeyRepository`(포트 `IdempotencyKeyPort`)
->   ([TASK-002I-B](experiments/TASK-002I-B-idempotency-store.md)). 장애 구간 실험은 테스트 전용 구현으로 했다
->   ([TASK-002I-A](experiments/TASK-002I-A-hold-idempotency-contract.md)).
-> - **없음** — TX0/TX1/TX2 운영 조정자, 서비스 배선, HTTP 헤더 처리, 인증, 응답 직렬화, 보존 기간 삭제 작업, 메트릭.
->   **요청 경로는 아직 이 저장소를 통과하지 않는다.** 아래의 "사용자 식별" 과 "응답" 절은 계약일 뿐 구현이 아니다.
+>   ([TASK-002I-B](experiments/TASK-002I-B-idempotency-store.md)). **서비스 수준 조정자 `IdempotentHoldService`** —
+>   §2 fingerprint 계산, §3 판정 순서, §4 결과 분류, §5 TX0/TX1/TX2 경계, 리스 설정(`railgate.idempotency.hold.lease`),
+>   메트릭, Spring 빈 배선 ([TASK-002I-C](experiments/TASK-002I-C-idempotent-hold-service.md)).
+>   장애 구간 실험은 테스트 전용 구현으로 했다 ([TASK-002I-A](experiments/TASK-002I-A-hold-idempotency-contract.md)).
+> - **없음** — HTTP 진입점·`Idempotency-Key` 헤더 처리, 인증, 응답 직렬화·상태 코드(§7, C3), 보존 기간 삭제 작업.
+>   **조정자를 부르는 HTTP 요청 경로가 없다** — 서비스 수준 연결이지 요청 경로의 완성이 아니다. 사용자 id 는 아직
+>   선점 명령에서 오며 인증된 주체와 대조하지 않는다. 아래의 "사용자 식별" 과 "응답" 절은 계약일 뿐 구현이 아니다.
 
 ---
 
