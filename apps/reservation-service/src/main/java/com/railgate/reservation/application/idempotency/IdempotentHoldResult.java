@@ -4,8 +4,8 @@ import com.railgate.reservation.idempotency.StoredHoldOutcome;
 import java.util.Objects;
 
 /**
- * 멱등 선점 호출의 결과 종류. <b>HTTP 상태 코드를 담지 않는다</b> — 매핑은 HTTP 계층의 몫이고
- * 진행 중 응답의 코드(ADR-009 C3)는 아직 미결정이다.
+ * 멱등 선점 호출의 결과 종류. <b>HTTP 상태 코드를 담지 않는다</b> — 매핑은 HTTP 계층의 몫이다.
+ * 매핑(ADR-009 C3 채택)은 {@code docs/HOLD_HTTP_CONTRACT.md} §6 에 설계만 있고 HTTP 구현은 아직 없다.
  *
  * <p>{@link Executed} 와 {@link Replayed} 는 <b>같은 저장된 업무 결과</b>({@link StoredHoldOutcome})를 담는다.
  * 실행한 호출과 재생한 호출이 클라이언트에게 같은 본문을 내도록 하기 위해서다 (규칙 17).

@@ -1,7 +1,8 @@
 # ADR-009 — 멱등성 키 설계 (리스 방식, 3단 트랜잭션 경계)
 
-> 상태: **부분 채택** — 선점 요청에 대해 **후보 B + generation·fence, C1·C2 채택** (2026-10-12, Task 2I-B).
-> **C3(진행 중 HTTP 코드)·C4(리스·보존 수치)는 미결정.** 제안 2026-10-11 (Task 2I-A)
+> 상태: **부분 채택** — 선점 요청에 대해 **후보 B + generation·fence, C1·C2 채택** (2026-10-12, Task 2I-B),
+> **C3 채택** (2026-10-25, Task 2J-A — [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md) §6).
+> **C4(리스·보존 수치)는 미결정.** 제안 2026-10-11 (Task 2I-A)
 >
 > 관련: [CLAUDE.md](../../CLAUDE.md) 규칙 5·7·9·10·14~18·21·22, [INVARIANTS.md](../INVARIANTS.md) I-8·I-9·I-12·I-18,
 > [REQUIREMENTS.md](../REQUIREMENTS.md) FR-2.9,
@@ -14,7 +15,7 @@
 > ([TASK-002I-B](../experiments/TASK-002I-B-idempotency-store.md)), 그리고 **서비스 수준 조정자 `IdempotentHoldService`
 > 와 그 빈 배선**([TASK-002I-C](../experiments/TASK-002I-C-idempotent-hold-service.md))이 있다. **HTTP 진입점·인증·응답
 > 직렬화는 없다.** 조정자를 부르는 요청 경로가 없으므로 실제 HTTP 요청에서 I-18 이 완성된 것은 아니다.
-> C1·C2 는 채택돼 CLAUDE.md 규칙 16 과 I-18 에 반영됐고, C3·C4 는 미결정이다 (§5).
+> C1·C2 는 채택돼 CLAUDE.md 규칙 16 과 I-18 에 반영됐고, C3 는 채택돼 규칙 21 에 반영됐다(HTTP 구현은 아직 없다). C4 는 미결정이다 (§5).
 >
 > §1·§2 와 §5 의 "원래 제안" 표는 **채택 전(Task 2I-A) 배경**이다. 거기 인용한 규칙 16·I-18 문구는 당시의 것이며
 > 현재 문구와 다르다.
@@ -136,7 +137,7 @@ TX0·TX1·TX2 는 **순차**다. 요청 하나가 동시에 쥐는 커넥션은 
 
 ---
 
-## 5. ★ 기존 규칙과의 충돌 — C1·C2 채택, C3·C4 미결정
+## 5. ★ 기존 규칙과의 충돌 — C1·C2·C3 채택, C4 미결정
 
 Task 2I-A 에서는 규칙과 불변식을 바꾸지 않았다. **Task 2I-B 에서 C1·C2 를 채택**해 규칙 16 과 I-18 을 정정했다.
 
@@ -144,7 +145,7 @@ Task 2I-A 에서는 규칙과 불변식을 바꾸지 않았다. **Task 2I-B 에�
 |---|---|
 | C1 | **채택** (2026-10-12) — CLAUDE.md 규칙 16 정정 |
 | C2 | **채택** (2026-10-12) — INVARIANTS.md I-18 보장 메커니즘 정정, 보장 범위를 "같은 키의 같은 세대" 로 명시 |
-| C3 | **미결정** — HTTP 계층 작업에서 정한다 |
+| C3 | **채택** (2026-10-25, Task 2J-A) — 진행 중·소유권 상실은 `409` + `code=IDEMPOTENCY_REQUEST_IN_PROGRESS` + `Retry-After`(초 단위, 초기값 1초는 가정), 좌석 경합 `409` 는 `code=SEAT_UNAVAILABLE`. CLAUDE.md 규칙 21 을 코드별 의미로 확장. 매핑 전체는 [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md) §6. **HTTP 구현은 아직 없다** |
 | C4 | **미결정** — 리스·보존 수치는 여전히 가정. 저장소는 리스를 호출자에게서 받고 기본값을 두지 않는다 |
 
 아래는 각 항목의 원래 제안이다 (채택 전 배경).
@@ -167,5 +168,5 @@ Task 2I-A 에서는 규칙과 불변식을 바꾸지 않았다. **Task 2I-B 에�
    고쳤다 (TASK-002I-B §9)
 2. ~~**애플리케이션 연결** — `HoldSeatsService` 앞단의 TX0/TX1/TX2 조정자, Micrometer 메트릭(재생·진행 중·불일치·인수·fence 거절)~~ —
    **완료** (Task 2I-C, `IdempotentHoldService`). 서비스 수준 연결이며 HTTP 진입점은 3 이다
-3. **인증·HTTP 경계** — 인증 주체에서 `userId`, `Idempotency-Key` 필수(누락 400), 상태 코드 매핑(C3), 응답 본문 직렬화
+3. **인증·HTTP 경계** — 인증 주체에서 `userId`, `Idempotency-Key` 필수(누락 400), 상태 코드 매핑(C3 채택, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md)), 응답 본문 직렬화(재생과 traceId — 같은 문서 D1 결정 대기)
 4. 해제·확정·결제 시작에 같은 계약을 **각각** 적용할지 판단 — 이번에 범용화하지 않았다

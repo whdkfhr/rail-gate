@@ -45,7 +45,7 @@ RailGate는 이 가운데 좌석 정합성 문제부터 범위를 좁혀, 단순
 |---|---|---|
 | 사용자별 선점 상한(I-12) | `user_hold_quota` migration(V6)과 조건부 `UPDATE` 저장소, 읽기 전용 drift 탐지 SQL, **선점 유스케이스**([TASK-002H-A](docs/experiments/TASK-002H-A-hold-application-service.md))와 **자발적 해제 유스케이스**([TASK-002H-B](docs/experiments/TASK-002H-B-release-application-service.md))·**단일 좌석 확정 유스케이스**([TASK-002H-C](docs/experiments/TASK-002H-C-confirmation-application-service.md))·**만료 배치 서비스**([TASK-002H-D](docs/experiments/TASK-002H-D-expiry-application-service.md))의 같은 트랜잭션 연동 | 스케줄러 배선, backfill 수행, REST API, 감사 로그·메트릭 — **네 경로가 서비스 수준에서 연결됐지만 부르는 주체가 없어 운영 활성화 전** |
 | 만료 배치 | 사용자 그룹별 실패 격리·재시도·다중 스위퍼·drift 탐지 계약([TASK-002G-F](docs/experiments/TASK-002G-F-expiry-sweeper-operating-contract.md))을 운영 서비스로 구현하고 quota 감소를 연동. 실패 후보를 지나는 키셋 커서 탐색([TASK-002H-D](docs/experiments/TASK-002H-D-expiry-application-service.md))과 **기본 비활성 스케줄러 배선**([TASK-002H-E](docs/experiments/TASK-002H-E-expiry-scheduler.md)) | **운영 활성화**(backfill·drift 점검 선행), 잡 락 도입 판단(측정 후), 손상·실패 그룹 알림 |
-| 애플리케이션 서비스·API | 좌석 선점·자발적 해제·단일 좌석 결제 시작([TASK-002H-F](docs/experiments/TASK-002H-F-start-payment-service.md))·단일 좌석 확정 유스케이스와 만료 배치 서비스, 도메인 포트 7종, JDBC 저장소 배선 완료 | 다좌석 결제 시작·확정, 결제 승인 검증(I-15), REST API, 인증·인가, 멱등키의 HTTP 요청 경로 연결(선점용 운영 저장소 V7·`JdbcIdempotencyKeyRepository`([TASK-002I-B](docs/experiments/TASK-002I-B-idempotency-store.md))와 서비스 수준 조정자 `IdempotentHoldService`([TASK-002I-C](docs/experiments/TASK-002I-C-idempotent-hold-service.md))까지 있음 — HTTP 진입점·인증 없음, [ADR-009](docs/adr/ADR-009-idempotency-key.md) C3·C4 미결정), 감사 로그·메트릭 |
+| 애플리케이션 서비스·API | 좌석 선점·자발적 해제·단일 좌석 결제 시작([TASK-002H-F](docs/experiments/TASK-002H-F-start-payment-service.md))·단일 좌석 확정 유스케이스와 만료 배치 서비스, 도메인 포트 7종, JDBC 저장소 배선 완료 | 다좌석 결제 시작·확정, 결제 승인 검증(I-15), REST API, 인증·인가, 멱등키의 HTTP 요청 경로 연결(선점용 운영 저장소 V7·`JdbcIdempotencyKeyRepository`([TASK-002I-B](docs/experiments/TASK-002I-B-idempotency-store.md))와 서비스 수준 조정자 `IdempotentHoldService`([TASK-002I-C](docs/experiments/TASK-002I-C-idempotent-hold-service.md))까지 있음 — HTTP 진입점·인증 없음, [ADR-009](docs/adr/ADR-009-idempotency-key.md) C4 미결정. 선점 HTTP·인증 계약은 설계만 있음 — [HOLD_HTTP_CONTRACT.md](docs/HOLD_HTTP_CONTRACT.md), [ADR-015](docs/adr/ADR-015-login-and-admission-tokens.md)), 감사 로그·메트릭 |
 | 대기열 | `queue-service`, `queue-domain`, `queue-token` 모듈 골격만 존재 | Redis 대기열, 입장 토큰 발급·검증, SSE |
 | 결제 | 좌석의 `HELD → PAYING → SOLD` 상태 전이와 단일 좌석 결제 시작·확정 서비스만 구현 (PG 호출·승인 없음) | 결제 승인 모델, Mock PG, 실제 PG 연동, 실패 복구 |
 | 사용자 웹 | 화면·상태·테스트 계약만 문서화 | React 애플리케이션과 E2E 테스트 |
@@ -329,5 +329,6 @@ Testcontainers 통합 테스트 때문에 Docker가 필요합니다. 아직 서�
 - [사용자 웹 설계](docs/FRONTEND.md)
 - [개발 가이드](docs/DEVELOPMENT_GUIDE.md)
 - [선점 멱등성 계약](docs/IDEMPOTENCY_CONTRACT.md)
+- [선점 HTTP 계약](docs/HOLD_HTTP_CONTRACT.md)
 - [ADR](docs/adr)
 - [동시성 실험 기록](docs/experiments)

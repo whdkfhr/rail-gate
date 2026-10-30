@@ -90,7 +90,7 @@ Spring API의 OpenAPI 문서에서 TypeScript 타입을 생성해 백엔드와 D
 |---|---|
 | `202` | 처리 결과 확인 중, 상태 polling |
 | `401` / `403` | 인증 또는 입장 토큰 재확인 |
-| `409` | 좌석 경합·상태 변경 안내 후 최신 상태 재조회 |
+| `409` | **`code` 로 구분한다** — `SEAT_UNAVAILABLE` 은 좌석 경합 안내 후 최신 상태 재조회, `IDEMPOTENCY_REQUEST_IN_PROGRESS` 는 `Retry-After` 뒤 **같은 멱등키로** 재요청 ([HOLD_HTTP_CONTRACT.md](HOLD_HTTP_CONTRACT.md) §6) |
 | `429` | 입장 제한 또는 요청 상한 안내, 서버의 재시도 정책 준수 |
 | `5xx` / 네트워크 오류 | 현재 선택을 성공으로 간주하지 않고 재조회·재시도 선택 제공 |
 

@@ -51,7 +51,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <ul>
  *   <li><b>인증</b> — 사용자는 {@link HoldSeatsCommand#userId()} 에서 온다. 인증된 주체와의 대조가 없으므로
  *       남의 사용자 id 로 키 범위를 쓸 수 있다는 한계가 남는다</li>
- *   <li>HTTP 응답·상태 코드(ADR-009 C3), 응답 직렬화, 보존 기간 삭제, 다른 유스케이스</li>
+ *   <li>HTTP 응답·상태 코드(매핑은 ADR-009 C3 채택 — {@code docs/HOLD_HTTP_CONTRACT.md}), 응답 직렬화, 보존 기간 삭제,
+ *       다른 유스케이스</li>
  * </ul>
  *
  * <h2>잠금 순서와 커넥션</h2>

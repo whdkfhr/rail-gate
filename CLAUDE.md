@@ -127,7 +127,11 @@ apps/reservation-service  MVC       ─┼─> modules/reservation-domain ──
 
 ## 응답 규약
 
-21. `409 Conflict` = 좌석 경합 실패. **정상 동작이며 오류율/로그 ERROR 에 포함하지 않는다.**
+21. `409 Conflict` = **정상 경합 결과**이며 의미는 오류 본문의 `code` 로 구분한다 (ADR-009 C3).
+    `SEAT_UNAVAILABLE` = 좌석 경합 실패. `IDEMPOTENCY_REQUEST_IN_PROGRESS` = 같은 멱등키 요청이 진행 중이거나
+    이 시도가 소유권을 잃었다 — `Retry-After`(초 단위, 재시도 권고 간격이지 완료 예상 시간이 아님) 필수.
+    **둘 다 정상 동작이며 오류율/로그 ERROR 에 포함하지 않는다.** 클라이언트는 상태 코드가 아니라 `code` 로 분기한다.
+    실제 서버 장애는 5xx 이며 오류율·ERROR 에 포함한다 (`docs/HOLD_HTTP_CONTRACT.md` §6).
 22. `429` = rate limit / 입장 제한. 오류 아님. `Retry-After` 헤더 필수.
 23. `202 Accepted` = 결제 결과 미확정(`UNKNOWN`). 클라이언트 폴링 필요.
 24. 오류 응답은 `{ code, message, traceId }` 형식을 지킨다.
