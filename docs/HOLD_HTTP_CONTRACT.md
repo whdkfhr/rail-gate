@@ -1,6 +1,7 @@
 # RailGate — 좌석 선점 HTTP 계약
 
-> 상태: **설계 계약 v0.1** (2026-10-25, Task 2J-A). **구현 없음** — 컨트롤러·보안 필터·JWT 검증·발급기는 아직 없다.
+> 상태: **설계 계약 v0.2** (2026-10-30, Task 2J-B — D1~D4 결정 반영). v0.1 2026-10-25 (Task 2J-A).
+> **구현 없음** — 컨트롤러·보안 필터·JWT 검증·발급기는 아직 없다 (액세스 토큰 검증은 Task 2J-B 예정).
 >
 > 관련: [REQUIREMENTS.md](REQUIREMENTS.md) FR-2.1·2.3·2.6·2.9·P-13, [IDEMPOTENCY_CONTRACT.md](IDEMPOTENCY_CONTRACT.md),
 > [ADR-009](adr/ADR-009-idempotency-key.md) (C3 채택), [ADR-015](adr/ADR-015-login-and-admission-tokens.md) (인증·입장 토큰),
@@ -69,7 +70,7 @@ Content-Type: application/json
 - **인증을 입력 검증보다 먼저 한다.** 인증되지 않은 요청에 본문 검증 결과를 알려 주지 않는다.
 - **6 의 해석은 권한 판정용 사전 조회다.** 선점 트랜잭션은 `HoldSeatsService` 가 같은 해석을 TX1 안에서 다시 한다.
   좌석의 회차 소속은 정상 애플리케이션 경로에서 바뀌지 않으므로(ARCHITECTURE §3-1, TASK-002G-E-B2) 두 결과는 같다고 본다.
-  DB 직접 SQL 로 소속을 바꾸면 어긋날 수 있다 — **[결정 필요] D4** 에서 TX1 안 재확인 여부를 정한다.
+  DB 직접 SQL 로 소속을 바꾸면 어긋날 수 있다 — **D4(채택)** 에 따라 TX1 안에서도 다시 대조한다 (§8.1, 선점 HTTP 연결 때 구현).
 - 6 에서 없는 좌석·회차 혼합이 드러나면 키를 소비하지 않고 422 를 낸다. 같은 사유가 8 의 TX1 안에서 처음 드러나면(사전 조회와
   TX1 사이에 좌석이 생기거나 사라지는 경우 — 현재 정상 경로에는 없다) 업무 실패로 **저장**되어 재생된다. 코드와 상태는 같다.
 
@@ -123,7 +124,7 @@ Content-Type: application/json
 | `Executed` | `Succeeded` | **201** | — (성공 본문) | — | 예 | 정상 |
 | `Replayed` | `Succeeded` | **201** | — (같은 성공 본문) | — | 예 | 정상 |
 | `Executed`·`Replayed` | `Rejected(SEAT_UNAVAILABLE)` | **409** | `SEAT_UNAVAILABLE` | — | 예 | 정상 경합 |
-| `Executed`·`Replayed` | `Rejected(QUOTA_EXCEEDED)` | **429** | `QUOTA_EXCEEDED` | **[결정 필요] D3** | 예 | 정상 거절 |
+| `Executed`·`Replayed` | `Rejected(QUOTA_EXCEEDED)` | **409** | `QUOTA_EXCEEDED` | — (D3: 강제하지 않음) | 예 | 정상 거절 |
 | `Executed`·`Replayed` | `Rejected(SALE_EVENT_SCOPE_REJECTED)` | **422** | `SALE_EVENT_SCOPE_REJECTED` | — | 예 | 클라이언트 오류 |
 | `InProgress` | — | **409** | `IDEMPOTENCY_REQUEST_IN_PROGRESS` | `1` (가정) | 아니오 | 정상 |
 | `OwnershipLost` | — | **409** | `IDEMPOTENCY_REQUEST_IN_PROGRESS` | `1` (가정) | 아니오 | 정상 |
@@ -135,6 +136,10 @@ Content-Type: application/json
 - **[확정] ADR-009 C3** — 진행 중과 소유권 상실은 둘 다 `409` + `IDEMPOTENCY_REQUEST_IN_PROGRESS` 다. 소유권을 잃은 시도는
   상태를 남기지 않았고, 같은 키로 다시 보내면 현재 소유자의 결과를 받으므로 클라이언트 입장에서 진행 중과 같다.
   좌석 경합 `409` 는 `code=SEAT_UNAVAILABLE` 로 구분한다. **클라이언트는 상태 코드가 아니라 `code` 로 분기한다.**
+- **[확정] D3** — 1인당 상한 초과는 **`409` + `QUOTA_EXCEEDED`** 다. 429(rate limit·입장 제한, 규칙 22)가 아니다 — 시간이
+  지나서가 아니라 이미 가진 홀드가 해제·만료돼야 풀리므로 `Retry-After` 를 강제하지 않는다. **같은 키는 저장된 거절을
+  재생하므로**, 상한이 풀린 뒤 새로 선점하려면 **새 멱등키**로 보내야 한다. 진행 중·소유권 상실의 `Retry-After` 계약과
+  일반적인 429 규약(규칙 22)은 그대로다.
 - **[확정] `Retry-After` 는 초 단위 정수**(`Retry-After: 1`)다. **재시도 권고 간격이지 완료 예상 시간이 아니다.**
   초기값 1초는 근거 없는 **가정**이다 — 리스(기본 30초, C4 미결정)보다 훨씬 짧게 두어 정상 완료를 빨리 재생하게 하려는 의도다.
 - 503 과 500 의 구분은 HTTP 계층이 예외 타입으로 한다(**[제안]** Spring `TransientDataAccessException`·
@@ -146,7 +151,7 @@ Content-Type: application/json
 
 | 분류 | 응답 | 로그 수준 | 서버 오류율 |
 |---|---|---|---|
-| 정상 | 201, 409 `SEAT_UNAVAILABLE`, 409 `IDEMPOTENCY_REQUEST_IN_PROGRESS`, 429 `QUOTA_EXCEEDED` | INFO 이하 | **포함하지 않는다** (규칙 21·22) |
+| 정상 | 201, 409 `SEAT_UNAVAILABLE`, 409 `QUOTA_EXCEEDED`, 409 `IDEMPOTENCY_REQUEST_IN_PROGRESS` | INFO 이하 | **포함하지 않는다** (규칙 21) |
 | 클라이언트 오류 | 400, 401, 403, 415, 422 | INFO (인증 실패 급증은 별도 메트릭으로 관찰) | 포함하지 않는다 |
 | 서버 장애 | 500, 503 | **ERROR** | **포함한다** |
 
@@ -157,7 +162,7 @@ Content-Type: application/json
 
 ## 7. 응답 본문
 
-### 7.1 성공 (201) [확정 — 단 D2]
+### 7.1 성공 (201) [확정 — D2 채택]
 
 ```http
 HTTP/1.1 201 Created
@@ -170,22 +175,35 @@ Content-Type: application/json
 본문의 세 필드는 **저장된 성공 결과에서만** 만든다. 그래서 재생 본문이 실행 본문과 같다. `Location` 도 `holdId` 에서 정해진다.
 
 - **재생은 현재 상태가 아니다.** 재생한 `holdId` 는 이미 해제·만료됐을 수 있다. 현재 상태와 만료 시각은 홀드 조회(후속 API)로 본다.
-- `expiresAt` 은 넣지 않는다. 저장 결과에 없고, 재생 시점에 다시 읽으면 실행 응답과 달라진다 — **[결정 필요] D2**.
+- **[확정] D2** — `expiresAt` 은 넣지 않는다. 저장 결과에 없고, 재생 시점에 다시 읽으면 실행 응답과 달라진다. 현재 만료 시각은
+  **후속 홀드 조회 API** 가 준다.
 
-### 7.2 오류 [D1 결정 전 잠정]
+### 7.2 오류 [확정 — D1 채택]
+
+**재생 대상이 아닌 오류** — 본문에 현재 요청의 `traceId` 를 담는다 (규칙 24). 헤더 `X-Trace-Id` 와 같은 값이다.
 
 ```http
 HTTP/1.1 409 Conflict
 Content-Type: application/json
 Retry-After: 1
+X-Trace-Id: 4bf92f3577b34da6a3ce929d0e0e4736
 
-{ "code": "IDEMPOTENCY_REQUEST_IN_PROGRESS", "message": "같은 요청을 처리 중입니다. 잠시 후 같은 키로 다시 시도하세요.", "traceId": "…" }
+{ "code": "IDEMPOTENCY_REQUEST_IN_PROGRESS", "message": "같은 요청을 처리 중입니다. 잠시 후 같은 키로 다시 시도하세요.", "traceId": "4bf92f3577b34da6a3ce929d0e0e4736" }
 ```
 
-- 규칙 24 의 `{ code, message, traceId }` 형식이다. **`message` 는 `code` 마다 고정된 문구**이며 예외 메시지·SQL·스택·
-  내부 클래스 이름·사용자 id·멱등키·좌석 상태 상세를 담지 않는다.
-- 재생 대상 업무 실패(409 `SEAT_UNAVAILABLE`, 429, 422 `SALE_EVENT_SCOPE_REJECTED`)의 `traceId` 를 어떻게 다룰지는
-  **§7.3 / D1** 이 정한다.
+**재생 대상 업무 실패**(409 `SEAT_UNAVAILABLE`, 409 `QUOTA_EXCEEDED`, 422 `SALE_EVENT_SCOPE_REJECTED`) — 본문은
+`{ code, message }` 만 담는다. **규칙 24 의 예외**다 (D1). 현재 요청의 `traceId` 는 헤더로만 준다.
+
+```http
+HTTP/1.1 409 Conflict
+Content-Type: application/json
+X-Trace-Id: 0af7651916cd43dd8448eb211c80319c
+
+{ "code": "SEAT_UNAVAILABLE", "message": "선택한 좌석 중 이미 선점된 좌석이 있습니다." }
+```
+
+- **`message` 는 `code` 마다 고정된 문구**이며 예외 메시지·SQL·스택·내부 클래스 이름·사용자 id·멱등키·좌석 상태 상세를
+  담지 않는다.
 
 ### 7.3 ★ 최초 응답 재생과 traceId
 
@@ -213,10 +231,25 @@ Retry-After: 1
 | **B (권장)** | **재생 범위를 "상태 코드 + 본문" 으로, 본문은 저장 결과에서 결정적으로 만든다.** 재생 대상 응답 본문에는 `traceId` 를 넣지 않고, **모든 응답이 요청별 `traceId` 를 헤더(`X-Trace-Id`)로 낸다.** 재생 대상이 아닌 오류(400·401·403·5xx 등)는 본문에도 `traceId` 를 둔다 | 없음 | migration 없음. 재생 본문이 바이트 단위로 같다. 추적 id 는 언제나 현재 요청 것 | **규칙 24 의 예외**가 생긴다 — 재생 대상 업무 실패 본문에 `traceId` 가 없다 |
 | C | 본문에 요청별 `traceId` 를 넣고 I-18 의 "바이트 동일" 을 "업무 결과 동일" 로 완화 | 없음 | 단순 | I-18 검증 기준 완화 |
 
-권장은 **B** 다. 다만 B 와 C 는 기존 규칙(24)이나 불변식 검증 기준(I-18)을 바꾸는 일이므로 **임의로 개정하지 않고
-[결정 필요] D1** 로 남긴다. 결정 전까지 구현 Task 는 선점 HTTP 연결을 시작하지 않는다(§9).
+**[확정] D1 — B 를 채택했다** (2026-10-30). 재생 대상 응답의 **상태 코드·본문 바이트·`Location`·`Content-Type`** 을 유지하고,
+`traceId` 는 **모든 응답**의 `X-Trace-Id` 헤더에 현재 요청 값으로 준다. 재생 대상 업무 실패 본문은 `{ code, message }` 만 담는
+규칙 24 의 예외이고, 인증 실패 등 재생 대상이 아닌 오류는 본문에도 현재 `traceId` 를 담는다. CLAUDE.md 규칙 24 와 I-18 T-4 의
+"응답" 범위를 이에 맞췄다.
 
-재생 범위 정의 (B 기준):
+#### ★ 배포 간 응답 호환 조건 [확정]
+
+B 는 응답을 저장 결과에서 **매번 다시 만든다.** 그래서 같은 코드로 만드는 동안에만 바이트가 같다.
+
+- **배포 후 `message` 문구·상태 코드·JSON 필드 이름·필드 순서·숫자·문자열 표현(직렬화 설정)이 바뀌면, 배포 전에 저장된 결과를
+  재생한 응답은 최초 응답과 바이트가 달라진다.** 결정적 생성이 배포 간 동일성까지 보장하지는 않는다.
+- 따라서 **재생 가능한 기존 키가 하나라도 남아 있는 동안** 재생 대상 응답의 문구·상태·직렬화는 호환을 유지한다.
+- **보존 기간 자동 삭제가 없다.** "24시간(가정)이 지나면 형식을 바꿔도 된다" 고 가정하지 않는다 — 행은 지워지지 않고 남는다.
+- 형식을 바꿔야 하면 그 전에 **응답 버전 보존**(저장 행에 응답 형식 버전을 남기고 구버전 생성기를 유지) 또는 **원본 저장**(안 A)
+  전략을 별도로 채택한 뒤 구현한다. 그때까지 구버전 문구·직렬화를 코드에 계속 유지해야 하는 비용을 감수한다.
+- 이 조건은 재생 대상(201 성공, 409 `SEAT_UNAVAILABLE`·`QUOTA_EXCEEDED`, 422 `SALE_EVENT_SCOPE_REJECTED`)에만 걸린다.
+  재생되지 않는 오류(400·401·403·409 `IDEMPOTENCY_REQUEST_IN_PROGRESS`·422 `IDEMPOTENCY_KEY_REUSED`·5xx)는 자유롭게 바꿀 수 있다.
+
+재생 범위 정의:
 
 | 구성 | 재생 대상 | 비고 |
 |---|---|---|
@@ -234,12 +267,28 @@ Retry-After: 1
 
 | # | 항목 | 권장안 | 막는 작업 |
 |---|---|---|---|
-| **D1** | 재생 응답과 traceId (§7.3) | **B** — 재생 범위를 상태+본문으로, traceId 는 `X-Trace-Id` 헤더, 재생 대상 업무 실패 본문은 규칙 24 의 예외 | 선점 HTTP 연결 |
-| **D2** | 성공 본문의 `expiresAt` | 넣지 않는다. 홀드 조회 API 가 현재 만료 시각을 준다 (넣으려면 저장 결과·V8 필요) | 선점 HTTP 연결, 프론트 카운트다운 |
-| **D3** | 429 `QUOTA_EXCEEDED` 의 `Retry-After` | 규칙 22 는 429 에 `Retry-After` 를 요구하지만 quota 는 시간이 아니라 해제·만료로 풀린다. 상태를 **409 `QUOTA_EXCEEDED`** 로 옮기거나, 429 를 유지하고 `Retry-After` 를 "재시도 권고 간격(가정값)" 으로 둔다. I-12 문서가 429 를 쓰고 있어 **임의로 바꾸지 않는다** | 선점 HTTP 연결 |
-| **D4** | 입장 회차 검사의 위치 | 사전 조회(§3 단계 6~7)에 더해, 명령에 기대 회차를 실어 `HoldSeatsService` 가 TX1 안에서 해석한 회차와 대조 — 어긋나면 업무 실패가 아닌 403(저장하지 않음) | 선점 HTTP 연결 (보강은 후속 가능) |
-| C4 | 리스·보존 수치 (ADR-009) | 미결정 유지 | — |
-| ADR-015 D-A1 | 간이 JWT 발급의 신원 확인 방법 | ADR-015 §6 | 발급 엔드포인트 |
+| # | 항목 | 상태 | 막는 작업 |
+|---|---|---|---|
+| **D1** | 재생 응답과 traceId (§7.3) | **채택 (2026-10-30)** — B + 배포 간 응답 호환 조건 | — |
+| **D2** | 성공 본문의 `expiresAt` | **채택** — 넣지 않고 후속 홀드 조회로 | — |
+| **D3** | 상한 초과의 상태 코드 | **채택** — `409 QUOTA_EXCEEDED`, `Retry-After` 강제하지 않음, 재시도는 새 키 | — |
+| **D4** | 입장 회차 검사의 위치 | **채택** — 사전 조회 + TX1 안 재대조 (§8.1). **구현은 선점 HTTP 연결 때** | — |
+| C4 | 리스·보존 수치 (ADR-009) | **미결정** | — |
+| ADR-015 D-A1 | 간이 JWT 발급의 신원 확인 방법 | **미결정** | 발급 엔드포인트 |
+| ADR-015 D-A4 | 토큰 수명·시계 오차 수치 | **미결정** — 가정값으로 설정·테스트만 | — |
+
+### 8.1 D4 설계 — TX1 안의 입장 회차 재대조 [확정, 구현은 선점 HTTP 연결 Task]
+
+- **기대 회차 전달** — `HoldSeatsCommand` 에 `expectedSaleEventId`(인증된 입장 토큰의 `evt`)를 싣는다. 클라이언트 본문에서
+  받지 않는다. `HoldSeatsService` 는 TX1 안에서 좌석으로 해석한 회차가 이 값과 다르면 quota·좌석을 건드리기 전에
+  전용 예외(예: `AdmissionEventMismatchException`)를 던진다.
+- **fingerprint 영향 없음** — fingerprint 는 요청 본문의 의미(정렬한 `seatIds`)만 담는다 (`hold-seats/v1` 유지).
+  기대 회차는 요청 본문이 아니라 권한이고, 좌석의 회차 소속은 정상 경로에서 바뀌지 않으므로 같은 `seatIds` 에 맞는 `evt` 는
+  하나다. 재생 전에도 매 요청 §3 단계 7 의 사전 대조가 먼저 돌기 때문에, 다른 회차 토큰으로 저장된 결과를 재생받을 수 없다.
+- **403 비저장** — 이 예외는 `HoldRejectionClassifier` 의 업무 실패가 **아니다**. 조정자는 결과를 저장하지 않고 리스를 포기한 뒤
+  예외를 전파하고, HTTP 계층이 **403 `ADMISSION_EVENT_MISMATCH`** 로 매핑한다 (5xx·오류율로 세지 않는다). 키 행은 리스가
+  만료된 `IN_PROGRESS` 로 남으므로 같은 키·같은 좌석의 재요청은 인수해 다시 대조하고, 다른 좌석이면 fingerprint 불일치 422 다.
+- 조정자 메트릭 `calls{result=failed}` 에 섞이지 않도록 구현 시 별도 분류를 둔다.
 
 ---
 
@@ -255,6 +304,14 @@ Retry-After: 1
 | A4 | 회차 E1 입장 토큰으로 회차 E2 좌석 요청 | 403 `ADMISSION_EVENT_MISMATCH`, 키 행 없음 |
 | A5 | 본문에 `userId` 를 넣어 남의 키 범위를 노림 | 400 `INVALID_REQUEST` (알려지지 않은 필드) |
 | A6 | 입장 검증 중 Redis·queue-service 중단 | 서명 검증만으로 판정 — 네트워크 호출 0 (I-7, 규칙 4) |
+
+### 관측 (D1)
+
+| # | 시나리오 | 기대 |
+|---|---|---|
+| T1 | 모든 응답(성공·재생·오류) | `X-Trace-Id` 헤더에 현재 요청의 traceId |
+| T2 | 재생 대상이 아닌 오류 (401 등) | 본문 `traceId` = 헤더 `X-Trace-Id` |
+| T3 | 같은 키 재생 (201, 409 `SEAT_UNAVAILABLE`·`QUOTA_EXCEEDED`, 422 `SALE_EVENT_SCOPE_REJECTED`) | 상태·본문 바이트·`Location`·`Content-Type` 동일, `X-Trace-Id` 는 요청마다 다름, 본문에 `traceId` 없음 |
 
 ### 입력
 
@@ -282,11 +339,13 @@ Retry-After: 1
 |---|---|---|
 | F1 | TX1 중 잠금 대기 초과 주입 | 503 + `Retry-After`, ERROR 로그, 좌석·quota 롤백, 즉시 재시도는 인수해 실행 |
 | F2 | 커밋 결과 불명 주입 | 500, 재시도 시 저장된 성공 재생 |
-| F3 | 업무 409·429 대량 발생 | 서버 오류율 메트릭 불변, ERROR 로그 0 |
+| F3 | 업무 409(`SEAT_UNAVAILABLE`·`QUOTA_EXCEEDED`) 대량 발생 | 서버 오류율 메트릭 불변, ERROR 로그 0 |
+| F4 | 상한 초과 409 뒤 홀드 해제, 같은 키 재요청 | 409 `QUOTA_EXCEEDED` 재생. 새 키로는 새로 실행 |
+| F5 | TX1 안에서 회차 불일치(D4) | 403 `ADMISSION_EVENT_MISMATCH`, 결과 미저장, 좌석·quota 불변, 오류율 미포함 |
 
 ---
 
 ## 10. 다음 구현 순서
 
-[TASK-002J-A](experiments/TASK-002J-A-hold-http-contract.md) §5 에 작은 단위로 나눴다. 요약: **D1~D3 결정 → 인증 기반(액세스 토큰 검증) →
-입장 토큰 검증 → 선점 HTTP 연결 → 간이 발급 엔드포인트.**
+[TASK-002J-A](experiments/TASK-002J-A-hold-http-contract.md) §5 에 작은 단위로 나눴다. 요약: ~~D1~D4 결정~~(완료, 2026-10-30) →
+인증 기반(액세스 토큰 검증·traceId, Task 2J-B) → 입장 토큰 검증 → 선점 HTTP 연결(D4 포함) → 간이 발급 엔드포인트.

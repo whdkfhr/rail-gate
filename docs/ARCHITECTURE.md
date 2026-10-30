@@ -343,7 +343,7 @@ I-12 는 집계가 아니라 **카운터 행의 조건부 UPDATE** 로 강제한
 ```sql
 UPDATE user_hold_quota SET held_seats = held_seats + ?
  WHERE sale_event_id = ? AND user_id = ? AND held_seats + ? <= 4;
--- affected_rows = 0 → 상한 초과이거나 행이 없다 (429 로 매핑될 자리)
+-- affected_rows = 0 → 상한 초과이거나 행이 없다 (HTTP 409 QUOTA_EXCEEDED, HOLD_HTTP_CONTRACT D3)
 ```
 
 | 계약 | 내용 |
@@ -602,4 +602,4 @@ rg:{evt:E1:s0}:waiting ... rg:{evt:E1:s15}:waiting   (16 샤드)
 | ADR-012 | Kafka 토픽을 생애주기 단위로 통합한 이유 |
 | ADR-013 | 부하 테스트 도구로 k6 를 선택한 이유 |
 | ADR-014 | 대기열 샤딩 전략과 공정성 트레이드오프 |
-| [ADR-015](adr/ADR-015-login-and-admission-tokens.md) | 로그인 액세스 토큰과 입장 토큰의 분리 — **제안** (Task 2J-A, 구현 없음) |
+| [ADR-015](adr/ADR-015-login-and-admission-tokens.md) | 로그인 액세스 토큰과 입장 토큰의 분리 — **부분 채택** (D-A2·A3, Task 2J-B), D-A1·A4 결정 대기 |

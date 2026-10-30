@@ -137,8 +137,8 @@ TX2 (REQUIRES_NEW)  업무 실패 기록 또는 리스 포기 (세대·fence 조
 ## 7. 응답 (계약만 — HTTP 계층 미구현)
 
 > **현행 HTTP 계약은 [HOLD_HTTP_CONTRACT.md](HOLD_HTTP_CONTRACT.md) §6 이다** (Task 2J-A, C3 채택). 아래 표는 Task 2I-A·B 시점의
-> 제안으로 보존한다. 달라진 점: 진행 중·소유권 상실 = `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`, 회차 해석 거부 = `422`,
-> 재시도 가능한 장애 = `503`, 그 외 = `500`. 재생과 traceId 는 같은 문서 §7.3 D1 결정 대기.
+> 제안으로 보존한다. 달라진 점: 진행 중·소유권 상실 = `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`, 상한 초과 = `409 QUOTA_EXCEEDED`(D3),
+> 회차 해석 거부 = `422`, 재시도 가능한 장애 = `503`, 그 외 = `500`. 재생과 traceId 는 같은 문서 §7.3 D1(채택) 을 따른다.
 
 | 상황 | 제안 | 비고 |
 |---|---|---|

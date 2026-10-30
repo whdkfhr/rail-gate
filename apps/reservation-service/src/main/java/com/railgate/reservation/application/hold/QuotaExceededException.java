@@ -15,12 +15,11 @@ package com.railgate.reservation.application.hold;
  * <p>하나의 타입으로 합치면 호출부가 둘을 구분할 수 없고, 사용자는 재시도해도
  * 계속 실패하는 이유를 알 수 없다.
  *
- * <h2>★ HTTP 매핑은 여기서 정하지 않는다</h2>
+ * <h2>★ HTTP 매핑은 여기서 하지 않는다</h2>
  *
- * <p>Task 2H-A 의 범위가 아니다. REST API 자체가 없다.
- * 결정할 때는 규칙 21(409 = 좌석 경합)과 규칙 22(429 = 입장 제한, {@code Retry-After} 필수)를
- * 함께 보고 <b>어느 쪽도 아닌 제3의 상태가 맞는지</b>까지 검토해야 한다 —
- * 상한 초과는 경합도 rate limit 도 아니다.
+ * <p>매핑은 {@code docs/HOLD_HTTP_CONTRACT.md} D3 에서 <b>409 + {@code code=QUOTA_EXCEEDED}</b> 로 정했다
+ * (2026-10-30). 상한 초과는 rate limit(429, 규칙 22)이 아니다 — 시간이 아니라 기존 홀드의 해제·만료로 풀리므로
+ * {@code Retry-After} 를 강제하지 않는다. HTTP 계층은 아직 없다.
  *
  * <p>매핑은 반드시 <b>트랜잭션 경계 밖</b>에서 한다. 경계 안에서 잡으면
  * 좌석 선점 실패를 삼키고 quota 만 커밋하는 경로가 생긴다.

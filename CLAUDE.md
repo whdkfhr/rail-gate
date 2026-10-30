@@ -127,14 +127,19 @@ apps/reservation-service  MVC       ─┼─> modules/reservation-domain ──
 
 ## 응답 규약
 
-21. `409 Conflict` = **정상 경합 결과**이며 의미는 오류 본문의 `code` 로 구분한다 (ADR-009 C3).
-    `SEAT_UNAVAILABLE` = 좌석 경합 실패. `IDEMPOTENCY_REQUEST_IN_PROGRESS` = 같은 멱등키 요청이 진행 중이거나
-    이 시도가 소유권을 잃었다 — `Retry-After`(초 단위, 재시도 권고 간격이지 완료 예상 시간이 아님) 필수.
-    **둘 다 정상 동작이며 오류율/로그 ERROR 에 포함하지 않는다.** 클라이언트는 상태 코드가 아니라 `code` 로 분기한다.
+21. `409 Conflict` = **정상 경합·업무 거절 결과**이며 의미는 오류 본문의 `code` 로 구분한다 (ADR-009 C3, HOLD_HTTP_CONTRACT D3).
+    `SEAT_UNAVAILABLE` = 좌석 경합 실패. `QUOTA_EXCEEDED` = 1인당 선점 상한 초과 — 같은 키는 저장된 거절을 재생하므로
+    상한이 풀린 뒤 다시 선점하려면 새 멱등키가 필요하다. `Retry-After` 를 강제하지 않는다.
+    `IDEMPOTENCY_REQUEST_IN_PROGRESS` = 같은 멱등키 요청이 진행 중이거나 이 시도가 소유권을 잃었다 —
+    `Retry-After`(초 단위, 재시도 권고 간격이지 완료 예상 시간이 아님) 필수.
+    **모두 정상 동작이며 오류율/로그 ERROR 에 포함하지 않는다.** 클라이언트는 상태 코드가 아니라 `code` 로 분기한다.
     실제 서버 장애는 5xx 이며 오류율·ERROR 에 포함한다 (`docs/HOLD_HTTP_CONTRACT.md` §6).
 22. `429` = rate limit / 입장 제한. 오류 아님. `Retry-After` 헤더 필수.
 23. `202 Accepted` = 결제 결과 미확정(`UNKNOWN`). 클라이언트 폴링 필요.
-24. 오류 응답은 `{ code, message, traceId }` 형식을 지킨다.
+24. 오류 응답은 `{ code, message, traceId }` 형식을 지킨다. 모든 응답은 현재 요청의 traceId 를 `X-Trace-Id` 헤더로도 낸다.
+    **예외 — 멱등 재생 대상 업무 실패**(선점의 409 `SEAT_UNAVAILABLE`·`QUOTA_EXCEEDED`, 422 `SALE_EVENT_SCOPE_REJECTED`)는
+    재생 시 본문 바이트가 같아야 하므로 본문에 `{ code, message }` 만 담고 traceId 는 헤더로만 준다
+    (HOLD_HTTP_CONTRACT D1). 재생 대상 응답의 문구·상태·직렬화는 재생 가능한 키가 남아 있는 동안 바꾸지 않는다.
 
 ---
 

@@ -145,7 +145,7 @@ Task 2I-A 에서는 규칙과 불변식을 바꾸지 않았다. **Task 2I-B 에�
 |---|---|
 | C1 | **채택** (2026-10-12) — CLAUDE.md 규칙 16 정정 |
 | C2 | **채택** (2026-10-12) — INVARIANTS.md I-18 보장 메커니즘 정정, 보장 범위를 "같은 키의 같은 세대" 로 명시 |
-| C3 | **채택** (2026-10-25, Task 2J-A) — 진행 중·소유권 상실은 `409` + `code=IDEMPOTENCY_REQUEST_IN_PROGRESS` + `Retry-After`(초 단위, 초기값 1초는 가정), 좌석 경합 `409` 는 `code=SEAT_UNAVAILABLE`. CLAUDE.md 규칙 21 을 코드별 의미로 확장. 매핑 전체는 [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md) §6. **HTTP 구현은 아직 없다** |
+| C3 | **채택** (2026-10-25, Task 2J-A) — 진행 중·소유권 상실은 `409` + `code=IDEMPOTENCY_REQUEST_IN_PROGRESS` + `Retry-After`(초 단위, 초기값 1초는 가정), 좌석 경합 `409` 는 `code=SEAT_UNAVAILABLE`. CLAUDE.md 규칙 21 을 코드별 의미로 확장. 상한 초과도 `409 QUOTA_EXCEEDED`(D3, 2026-10-30), 재생 응답과 traceId 는 D1 B 채택. 매핑 전체는 [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md) §6. **HTTP 구현은 아직 없다** |
 | C4 | **미결정** — 리스·보존 수치는 여전히 가정. 저장소는 리스를 호출자에게서 받고 기본값을 두지 않는다 |
 
 아래는 각 항목의 원래 제안이다 (채택 전 배경).
@@ -168,5 +168,5 @@ Task 2I-A 에서는 규칙과 불변식을 바꾸지 않았다. **Task 2I-B 에�
    고쳤다 (TASK-002I-B §9)
 2. ~~**애플리케이션 연결** — `HoldSeatsService` 앞단의 TX0/TX1/TX2 조정자, Micrometer 메트릭(재생·진행 중·불일치·인수·fence 거절)~~ —
    **완료** (Task 2I-C, `IdempotentHoldService`). 서비스 수준 연결이며 HTTP 진입점은 3 이다
-3. **인증·HTTP 경계** — 인증 주체에서 `userId`, `Idempotency-Key` 필수(누락 400), 상태 코드 매핑(C3 채택, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md)), 응답 본문 직렬화(재생과 traceId — 같은 문서 D1 결정 대기)
+3. **인증·HTTP 경계** — 인증 주체에서 `userId`, `Idempotency-Key` 필수(누락 400), 상태 코드 매핑(C3 채택, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md)), 응답 본문 직렬화(재생과 traceId — 같은 문서 D1 채택)
 4. 해제·확정·결제 시작에 같은 계약을 **각각** 적용할지 판단 — 이번에 범용화하지 않았다
