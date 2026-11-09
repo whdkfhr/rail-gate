@@ -40,5 +40,9 @@ hikaricp = { module = "com.zaxxer:HikariCP" }
 testcontainers-mysql = { module = "org.testcontainers:testcontainers-mysql" }
 testcontainers-junit = { module = "org.testcontainers:testcontainers-junit-jupiter" }
 
+# 액세스 토큰 검증 (ADR-016). OAuth 로그인 연동이 아니라 Bearer JWT 의 로컬 대칭키 검증에만 쓴다.
+# Spring Security 7.x 와 Nimbus JOSE+JWT 버전은 Spring Boot BOM 이 관리한다.
+spring-boot-starter-security-oauth2-resource-server = { module = "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server" }
+
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }

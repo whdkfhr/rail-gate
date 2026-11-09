@@ -603,3 +603,4 @@ rg:{evt:E1:s0}:waiting ... rg:{evt:E1:s15}:waiting   (16 샤드)
 | ADR-013 | 부하 테스트 도구로 k6 를 선택한 이유 |
 | ADR-014 | 대기열 샤딩 전략과 공정성 트레이드오프 |
 | [ADR-015](adr/ADR-015-login-and-admission-tokens.md) | 로그인 액세스 토큰과 입장 토큰의 분리 — **부분 채택** (D-A2·A3, Task 2J-B), D-A1·A4 결정 대기 |
+| [ADR-016](adr/ADR-016-access-token-validation-library.md) | 액세스 토큰 검증 라이브러리 — **채택** (Spring Security Resource Server JWT 로컬 검증, Task 2J-B) |

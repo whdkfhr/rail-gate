@@ -1,7 +1,8 @@
 # RailGate — 좌석 선점 HTTP 계약
 
 > 상태: **설계 계약 v0.2** (2026-10-30, Task 2J-B — D1~D4 결정 반영). v0.1 2026-10-25 (Task 2J-A).
-> **구현 없음** — 컨트롤러·보안 필터·JWT 검증·발급기는 아직 없다 (액세스 토큰 검증은 Task 2J-B 예정).
+> **구현 상태** — 액세스 토큰 검증(§3 단계 1)·401/403 고정 본문·`X-Trace-Id` 만 있다 ([TASK-002J-B](experiments/TASK-002J-B-access-token-validation.md)).
+> 입장 토큰 검증(단계 2~3·7)·선점 컨트롤러(단계 4~8)·발급기는 아직 없다.
 >
 > 관련: [REQUIREMENTS.md](REQUIREMENTS.md) FR-2.1·2.3·2.6·2.9·P-13, [IDEMPOTENCY_CONTRACT.md](IDEMPOTENCY_CONTRACT.md),
 > [ADR-009](adr/ADR-009-idempotency-key.md) (C3 채택), [ADR-015](adr/ADR-015-login-and-admission-tokens.md) (인증·입장 토큰),
@@ -348,4 +349,4 @@ B 는 응답을 저장 결과에서 **매번 다시 만든다.** 그래서 같�
 ## 10. 다음 구현 순서
 
 [TASK-002J-A](experiments/TASK-002J-A-hold-http-contract.md) §5 에 작은 단위로 나눴다. 요약: ~~D1~D4 결정~~(완료, 2026-10-30) →
-인증 기반(액세스 토큰 검증·traceId, Task 2J-B) → 입장 토큰 검증 → 선점 HTTP 연결(D4 포함) → 간이 발급 엔드포인트.
+~~인증 기반(액세스 토큰 검증·traceId)~~(Task 2J-B 완료) → 입장 토큰 검증 → 선점 HTTP 연결(D4 포함) → 간이 발급 엔드포인트.

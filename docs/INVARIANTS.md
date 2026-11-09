@@ -62,6 +62,10 @@
 
 ### I-7. 입장 권한이 없는 사용자는 좌석 예매 API를 사용할 수 없다
 
+> **현재 상태 — 아직 강제되지 않는다 (Task 2J-B).** reservation-service 에 **로그인 액세스 토큰 검증**(ADR-015 §3)과
+> 기본 거부 필터 체인이 생겨 *신원이 없는* 요청은 401 이다. 그러나 **입장 토큰 검증(ADR-015 §4)과 두 토큰의 사용자 대조(§5)가
+> 없어서**, 신원만 증명한 사용자가 대기열을 거쳤는지는 판정하지 않는다. 좌석 API 자체도 아직 없다. → Task 2J-C·2J-D.
+
 - **보장 메커니즘** — `reservation-service` 의 필터에서 토큰 검증. **queue-service 로의 네트워크 호출 없이** 서명만으로 판정한다.
 - **깨지는 조건** — 검증 실패 시 통과시키는 fail-open 정책. Redis 장애 시 전원 입장 → MySQL 붕괴.
 - **검증 방법** — 토큰 없이 / 만료 토큰으로 좌석 API 호출 → 401. `T-8`: Redis 중지 중에도 무효 토큰이 차단되는지.
@@ -226,7 +230,7 @@
 > 운영 테이블(V7 `idempotency_key`)과 JDBC 저장소(`JdbcIdempotencyKeyRepository`)
 > ([TASK-002I-B](experiments/TASK-002I-B-idempotency-store.md)), 그리고 TX0/TX1/TX2 조정자 `IdempotentHoldService` 와
 > 그 빈 배선([TASK-002I-C](experiments/TASK-002I-C-idempotent-hold-service.md))이 있다.
-> **REST·`Idempotency-Key` 헤더·인증이 없으므로 I-18 은 HTTP 요청 경로에서 아직 강제되지 않는다.** 아래 메커니즘은
+> **REST·`Idempotency-Key` 헤더가 없으므로 I-18 은 HTTP 요청 경로에서 아직 강제되지 않는다.** (액세스 토큰 검증은 Task 2J-B 에서 생겼으나 선점 컨트롤러가 없다.) 아래 메커니즘은
 > 조정자가 불려졌을 때의 보장이다. 사용자 id 는 아직 명령에서 오며 인증된 주체와 대조하지 않는다.
 
 - **보장 메커니즘** — 4단계.

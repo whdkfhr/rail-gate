@@ -1,9 +1,10 @@
 # ADR-015 — 로그인 액세스 토큰과 입장 토큰의 분리
 
 > 상태: **부분 채택** — 토큰 분리(§3~§5)와 **D-A2(HS256 + 용도별 키)·D-A3(`evt` = `sale_event.id`)** 채택 (2026-10-30, Task 2J-B).
-> D-A5(검증 라이브러리)는 Task 2J-B 에서 별도 ADR 로 정한다. **D-A1·D-A4 는 결정 대기.** 제안 2026-10-25 (Task 2J-A).
+> D-A5(검증 라이브러리)는 [ADR-016](ADR-016-access-token-validation-library.md) 로 결정. **D-A1·D-A4 는 결정 대기.** 제안 2026-10-25 (Task 2J-A).
 >
-> **구현 없음** — 검증 필터·발급 엔드포인트·서명키 설정은 아직 없다 (액세스 토큰 검증은 Task 2J-B 예정).
+> **구현 상태** — reservation-service 의 **액세스 토큰 검증(§3)만** 있다 ([TASK-002J-B](../experiments/TASK-002J-B-access-token-validation.md)).
+> 입장 토큰 검증(§4)·사용자 대조(§5)·발급 엔드포인트·개발 전용 발급(§6)은 없다.
 >
 > 관련: [REQUIREMENTS.md](../REQUIREMENTS.md) FR-2.1·P-9·P-13, [INVARIANTS.md](../INVARIANTS.md) I-6·I-7·I-20,
 > [ARCHITECTURE.md](../ARCHITECTURE.md) §5.2, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md), CLAUDE.md 절대 규칙 3·4, 규칙 34
@@ -172,4 +173,4 @@ queue-service 입장 토큰 발급은 Phase 2 다. 그 전까지 선점 HTTP 테
 | D-A2 | 서명 알고리즘 | **채택 (2026-10-30)** — MVP 는 HS256 + 용도별 키 분리. 입장 토큰의 ES256 전환은 Phase 2 에서 재검토 |
 | D-A3 | 대기열 `event` 와 `sale_event.id` 의 관계 | **채택 (2026-10-30)** — 같은 식별자 공간 (§5) |
 | D-A4 | 수명·시계 오차 (30분·10분·30초) | **결정 대기** — 가정값으로 설정·테스트만 한다. 측정·운영 요구로 정한다 |
-| D-A5 | JWT 라이브러리 | Task 2J-B 에서 ADR 로 선택. 새 의존성은 `libs.versions.toml` 에 먼저 등록 |
+| D-A5 | JWT 라이브러리 | **결정 (2026-10-30)** — [ADR-016](ADR-016-access-token-validation-library.md): Spring Security OAuth2 Resource Server 의 JWT 로컬 검증 |
