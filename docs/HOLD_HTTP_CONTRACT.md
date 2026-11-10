@@ -1,8 +1,9 @@
 # RailGate — 좌석 선점 HTTP 계약
 
 > 상태: **설계 계약 v0.2** (2026-10-30, Task 2J-B — D1~D4 결정 반영). v0.1 2026-10-25 (Task 2J-A).
-> **구현 상태** — 액세스 토큰 검증(§3 단계 1)·401/403 고정 본문·`X-Trace-Id` 만 있다 ([TASK-002J-B](experiments/TASK-002J-B-access-token-validation.md)).
-> 입장 토큰 검증(단계 2~3·7)·선점 컨트롤러(단계 4~8)·발급기는 아직 없다.
+> **구현 상태** — §3 단계 1(액세스 토큰, [TASK-002J-B](experiments/TASK-002J-B-access-token-validation.md))과 **단계 2~3(입장 토큰·
+> 사용자 대조, [TASK-002J-C](experiments/TASK-002J-C-admission-token-validation.md))**, 401/403 고정 본문, `X-Trace-Id`.
+> 단계 4~8(헤더·본문 검증, 회차 해석, 입장 회차 대조, 조정자 연결)·선점 컨트롤러·발급기는 아직 없다 (Task 2J-D).
 >
 > 관련: [REQUIREMENTS.md](REQUIREMENTS.md) FR-2.1·2.3·2.6·2.9·P-13, [IDEMPOTENCY_CONTRACT.md](IDEMPOTENCY_CONTRACT.md),
 > [ADR-009](adr/ADR-009-idempotency-key.md) (C3 채택), [ADR-015](adr/ADR-015-login-and-admission-tokens.md) (인증·입장 토큰),
@@ -59,7 +60,7 @@ Content-Type: application/json
 | 단계 | 하는 일 | 실패 응답 | 키 | 좌석 | quota |
 |---|---|---|---|---|---|
 | 1 | 로그인 액세스 토큰 검증 (ADR-015 §3) | 401 `AUTHENTICATION_REQUIRED` | 변경 없음 | 변경 없음 | 변경 없음 |
-| 2 | 입장 토큰 검증 — 서명·용도·만료·issuer·audience (ADR-015 §4) | 401 `ADMISSION_TOKEN_INVALID` | 변경 없음 | 변경 없음 | 변경 없음 |
+| 2 | 입장 토큰 검증 — `Admission-Token` 헤더 정확히 하나(중복·쉼표·빈 값 거부)·서명·용도·claim·만료 (ADR-015 §4) | 401 `ADMISSION_TOKEN_INVALID` + `WWW-Authenticate: Admission-Token` | 변경 없음 | 변경 없음 | 변경 없음 |
 | 3 | 입장 토큰 `sub` = 로그인 `sub` (I-6) | 403 `ADMISSION_USER_MISMATCH` | 변경 없음 | 변경 없음 | 변경 없음 |
 | 4 | `Idempotency-Key` 헤더 검증 (§4) | 400 `IDEMPOTENCY_KEY_INVALID` | 변경 없음 | 변경 없음 | 변경 없음 |
 | 5 | 본문 파싱·검증 → `HoldSeatsCommand` 생성 (§5) | 400 `INVALID_REQUEST` | 변경 없음 | 변경 없음 | 변경 없음 |
