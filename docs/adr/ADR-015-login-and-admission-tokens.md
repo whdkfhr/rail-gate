@@ -69,7 +69,7 @@
 | 형식 | JWS(JWT), `alg=HS256` 만 허용 |
 | 헤더 | `typ: "admission+jwt"` |
 | claim | `iss="railgate-queue"`, `aud="railgate-reservation"`(문자열 또는 문자열 배열), `sub`=사용자 id, `evt`=판매 회차 id, `iat`, `exp`, `jti`, `token_use="admission"`. 선택 `nbf` |
-| **claim 타입** (Task 2J-C) | `sub`·`evt` = **양수 `long` 10진 문자열**(앞자리 0 없음, 숫자 타입 거부), `jti` = 비어 있지 않은 문자열, `iat`·`exp`·`nbf` = 정수 JSON 숫자(초). `evt` 표현의 근거는 TASK-002J-C §2 |
+| **claim 타입** (Task 2J-C) | `sub`·`evt` = **양수 `long` 10진 문자열**(앞자리 0 없음, 숫자 타입 거부), `jti` = 비어 있지 않은 문자열, `iat`·`exp`·`nbf` = 정수 JSON 숫자(초), `Instant` 표현 범위 안(밖이면 `CLAIMS`, TASK-002J-C §8). `evt` 표현의 근거는 TASK-002J-C §2 |
 | 수명 | P-7 의 Active 세션 TTL(수령 후 10분)을 넘지 않는다 — **10분 (가정값)** |
 | 서명키 | **입장 토큰 전용 키** `K_admission`. `K_access` 와 다른 값이어야 한다 (기동 시 같으면 실패) |
 | 검증 위치 | reservation-service 필터. **queue-service·Redis 로의 네트워크 호출 없이** 서명만으로 판정 (I-7, 절대 규칙 4) |

@@ -44,7 +44,7 @@ I-6(사용자 바인딩은 됨, 회차 바인딩은 아직)·I-7·FR-2.1 은 **�
 미래 시각(`NOT_YET_VALID`, `iat`·`nbf` > now+30초) → 만료(`EXPIRED`, now > exp+30초). 사유는 메트릭 태그로만 쓰고 응답은 언제나 같은 401 이다.
 
 - `aud` 는 JWT 규격대로 문자열 하나 또는 문자열 배열을 받는다. 배열에 문자열이 아닌 원소가 있으면 거부
-- `iat`·`exp`·`nbf` 는 **정수** JSON 숫자만 받는다 (소수·문자열 거부)
+- `iat`·`exp`·`nbf` 는 **정수** JSON 숫자이고 `Instant` 표현 범위 안이어야 한다 (소수·문자열·범위 밖은 `CLAIMS`, §8 — PR #33 리뷰 보완)
 - 원래 타입은 서명 검증을 마친 페이로드를 Nimbus 로 읽은 JSON 값으로 본다 — 직접 파싱하지 않는다
 
 ### 키 — `K_admission`
@@ -152,3 +152,78 @@ Spring Security 를 올릴 때 함께 맞춰야 한다.
 **Task 2J-D 후속 범위** — 선점 운영 컨트롤러(`POST /api/reservations/holds`), `Idempotency-Key`·본문 검증(§4·§5), 좌석 → 판매 회차 사전 해석과
 `evt` 대조(403 `ADMISSION_EVENT_MISMATCH`), D4(명령에 기대 회차 + TX1 안 재대조, 403 비저장), 결과 → HTTP 매핑·`Retry-After`·D1 응답 직렬화,
 5xx 분류. 그 뒤 2J-E 간이 발급(D-A1 결정 필요).
+
+---
+
+## 8. PR #33 리뷰 보완 — 시각 claim 의 표현 범위 (2026-11-10)
+
+### 재현 조건
+
+올바른 테스트 키(`K_admission`)로 서명하고 `iss`·`aud`·`token_use`·`sub`·`evt`·`jti` 가 모두 정상인 입장 토큰에서 `iat`·`exp`·`nbf`
+하나를 `Long.MAX_VALUE` 또는 `Long.MIN_VALUE`(정수 JSON 숫자)로 둔다. 타입 검사(`Long`)는 통과하고 `Instant.ofEpochSecond` 가
+`DateTimeException` 을 던져 **검증 결과 대신 예외가 전파**됐다. 실제 필터 체인에서는 **500** 이었다 (기대: 401 `ADMISSION_TOKEN_INVALID`).
+
+### 조사한 연산 (토큰 값이 들어가는 시각 연산)
+
+| 위치(수정 전) | 연산 | 토큰 값만으로 범위를 넘나 |
+|---|---|---|
+| 119·120행 | `Instant.ofEpochSecond(iat)`·`(exp)` | 예 — `Instant` 범위(±약 3.2×10^16초) 밖 정수 |
+| 126행 | `Instant.ofEpochSecond(nbf)` | 예 — 같은 이유 |
+| 121행 | `Duration.between(iat, exp)` | 아니오 — 두 값이 `Instant` 범위 안이면 JDK 가 나노초 넘침을 내부에서 처리한다 |
+| 125행 | `now.plus(clockSkew)` | 아니오 — 현재 시각과 설정만 쓴다 (설정 문제, 아래) |
+| 129행 | `expiresAt.plus(clockSkew)` | 예 — `exp` 가 `Instant.MAX` 에서 30초 이내면 변환은 되지만 덧셈이 넘친다 |
+
+129행은 **기본 정책에서는 도달하지 않는다**: `exp` 가 `Instant.MAX` 근처면 `iat` 도 그 10분 안이어야 수명 검사를 통과하고, 그런 `iat` 는
+미래 검사에서 거부된다. 그래서 기본 정책의 끝값 테스트(`Instant_범위의_끝값은_기존_시각_규칙으로_판정한다`)는 **오버플로 검증이 아니다** —
+앞 단계(`LIFETIME`·`NOT_YET_VALID`)에서 거부될 뿐이다. 실제 도달은 최대 수명을 매우 크게 둔 정책(`max-lifetime` 은 설정 가능하다)에서
+`iat=now`, `exp=Instant.MAX−{0,1,29}초` 로 만들었고, 수정 전 스택이 129행의 `DateTimeException` 임을 확인했다.
+
+`long` 범위를 넘는 JSON 정수(`9223372036854775808` 등)는 Nimbus 가 정수 타입으로 파싱하지 않아 수정 전에도 `CLAIMS` 였다 (회귀 테스트로 고정).
+
+### 수정 범위
+
+- `AdmissionTokenVerifier` — 시각 claim 은 `Instant` 범위를 **변환 전에 비교**해 범위 밖이면 기존 `CLAIMS` 로 거부한다
+  (`AdmissionRejection.CLAIMS` 의 설명이 이미 "타입·범위" 다 — 새 사유·메트릭 태그 없음). 예외를 잡지 않는다.
+- 만료 비교를 `now > exp + skew` 에서 동치인 `now − skew > exp` 로 바꿨다 — 토큰 값에는 덧셈·뺄셈을 하지 않는다. `Instant` 는 정확한
+  값이라 두 비교의 결과가 같다 (만료 +30초 수락·+30초 1나노초 거부 경계 테스트로 확인).
+- **설정 검증(기동)** — `clockSkew` 를 현재 시각에 더하고 뺄 수 없으면 모든 요청이 예외를 내므로, 검증기 생성 시
+  `IllegalArgumentException` 으로 거부하고 `AdmissionTokenConfig` 가 `railgate.auth.admission-token 설정이 잘못됐다` 로 기동을 실패시킨다.
+  `DateTimeException`·`ArithmeticException` 만 이 두 연산에 한정해 잡는다. 요청 처리 중의 `now ± skew` 는 그대로 두어
+  **Clock 장애는 토큰 오류로 숨기지 않는다**.
+- 기존 시간 계약(수명 10분·오차 30초·검사 순서)과 정상 토큰의 허용 범위는 바꾸지 않았다. 매우 큰 `max-lifetime` 자체는 막지 않는다 —
+  넘침이 아니라 의미의 문제이고 값은 D-A4 미결정 가정값이다.
+
+### RED → GREEN
+
+| 대상 | RED (수정 전) | GREEN |
+|---|---|---|
+| `AdmissionTokenVerifierTest` §7 (신규 15) | 62개 중 **10개 실패** — `Long` 극단값 3·`Instant` 범위 ±1초 3 (119·120·126행 `DateTimeException`), 129행 도달 3 (`DateTimeException`), 기동 시 거부 1 (예외 없음) | 62/62 |
+| `AdmissionTokenFilterTest` §3-1 (신규 3) | 21개 중 **3개 실패** — `iat`·`exp`·`nbf` 모두 **500** | 21/21 |
+| `AdmissionTokenStartupTest` (+1 매개변수) | 13개 중 1개 실패 — 기동은 실패했지만 메시지에 설정 접두사가 없었다 (검증기 수정 뒤에 쓴 테스트라 "기동 성공" RED 는 단위 테스트 쪽 기록이다) | 13/13 |
+
+HTTP 테스트는 수정 전 검증기를 잠시 되돌려 실행했다(작업 사본만, stash 미사용). 토큰은 `Date` 가 아니라 `Long` 으로 넣었고 —
+`Date.from` 은 이 값을 만들기 전에 예외를 낸다 — 페이로드 원문에 그 정수가 그대로 있는지 테스트에서 확인한다. HTTP 회귀는
+401·`WWW-Authenticate: Admission-Token`·고정 본문 `{code, message, traceId}`·본문 traceId = `X-Trace-Id`·두 토큰 원문 미노출·
+조정자 미호출·멱등키·좌석·quota 불변·메트릭 `reason=claims` +1 을 확인한다.
+
+### 전체 검증
+
+2026-11-10, 이전 XML 을 지운 뒤 `./gradlew check --rerun-tasks --max-workers=1` — `BUILD SUCCESSFUL in 1m 58s`, 24 tasks executed.
+`verifyArchitectureRules` 포함.
+
+| 모듈 | tests | failures | errors | skipped |
+|---|---:|---:|---:|---:|
+| `apps:queue-service` | 1 | 0 | 0 | 0 |
+| `apps:reservation-service` | 396 | 0 | 0 | 0 |
+| `modules:reservation-domain` | 202 | 0 | 0 | 0 |
+| `modules:reservation-infra` | 621 | 0 | 0 | 0 |
+| `modules:queue-token` | 62 | 0 | 0 | 0 |
+| **합계** | **1,282** | **0** | **0** | **0** |
+
+§4 의 1,263개에서 +19 (queue-token 15, 앱 4). 기존 테스트를 지우거나 완화하지 않았다.
+
+### 이 보완에서 관측한 별도 위험 — 액세스 토큰의 `nbf` (수정하지 않음)
+
+같은 입력을 **액세스 토큰**(Task 2J-B, Spring Security 경로)에 넣어 일회성으로 확인했다(테스트는 남기지 않았다).
+`iat`·`exp` 극단값은 401 이었지만 **`nbf=Long.MAX_VALUE`·`Long.MIN_VALUE` 는 200 으로 통과**했다. 범위 밖 `nbf` 가 claim 변환에서
+빠지고 시각 검증이 `nbf` 없음으로 보는 것으로 추정한다(원인은 확인하지 않았다). 이번 지적 범위 밖이라 고치지 않았고 후속으로 남긴다.

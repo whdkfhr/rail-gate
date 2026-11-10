@@ -77,7 +77,9 @@ class AdmissionTokenStartupTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"railgate.auth.admission-token.clock-skew=-1s", "railgate.auth.admission-token.max-lifetime=0s",
-            "railgate.auth.admission-token.issuer= ", "railgate.auth.admission-token.audience= "})
+            "railgate.auth.admission-token.issuer= ", "railgate.auth.admission-token.audience= ",
+            // PR #33 리뷰 — 현재 시각에 더할 수 없는 시계 오차는 요청마다 예외가 나므로 기동에서 거부한다
+            "railgate.auth.admission-token.clock-skew=100000000000000d"})
     void 잘못된_정책_설정이면_기동이_실패한다(String property) {
         runner.withPropertyValues(ACCESS, ADMISSION + TestAccessTokens.OTHER_SECRET_BASE64, property)
                 .run(context -> assertFailed(context, "railgate.auth.admission-token", null));

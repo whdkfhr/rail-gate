@@ -4,6 +4,8 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSObject;
+import com.nimbusds.jose.Payload;
 import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
@@ -90,6 +92,28 @@ final class TestAdmissionTokens {
         JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder();
         spec.claims.forEach(claims::claim);
         return b64("{\"alg\":\"none\",\"typ\":\"admission+jwt\"}") + "." + b64(claims.build().toString()) + ".";
+    }
+
+    /**
+     * 페이로드 JSON 을 <b>그대로</b> 입장 키(HS256, {@code typ=admission+jwt})로 서명한다. claim 값이 Java 타입 변환
+     * ({@code Date}·{@code long} 등)을 거치지 않으므로 {@code long} 범위를 넘는 정수 같은 원시 입력을 만들 때 쓴다.
+     */
+    static String signedRaw(String payloadJson) {
+        try {
+            JWSObject jws = new JWSObject(
+                    new JWSHeader.Builder(JWSAlgorithm.HS256).type(new JOSEObjectType("admission+jwt")).build(),
+                    new Payload(payloadJson));
+            jws.sign(new MACSigner(Base64.getDecoder().decode(ADMISSION_SECRET)));
+            return jws.serialize();
+        } catch (JOSEException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 토큰 페이로드의 원문 JSON — 생성 과정에서 값이 바뀌지 않았는지 확인할 때 쓴다. */
+    static String payloadJson(String token) {
+        String payload = token.split("\\.")[1];
+        return new String(Base64.getUrlDecoder().decode(payload), StandardCharsets.UTF_8);
     }
 
     static String tampered(String token) {

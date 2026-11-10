@@ -43,6 +43,10 @@ public class AdmissionTokenConfig {
         } catch (IllegalArgumentException | NullPointerException invalid) {
             throw new IllegalStateException(PREFIX + " 설정이 잘못됐다: " + invalid.getMessage());
         }
-        return new AdmissionTokenVerifier(key, policy, clock);
+        try {
+            return new AdmissionTokenVerifier(key, policy, clock);
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalStateException(PREFIX + " 설정이 잘못됐다: " + invalid.getMessage());
+        }
     }
 }

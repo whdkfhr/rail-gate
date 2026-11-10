@@ -16,8 +16,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +29,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.json.JsonParserFactory;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -276,6 +280,43 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
             clock.set(NOW);
             assertAdmissionInvalid(post(access(), TestAccessTokens.admission(NOW, USER, FIXTURE_SALE_EVENT_ID,
                     s -> s.claim("exp", Date.from(NOW.plus(Duration.ofMinutes(10)).plusSeconds(1))))));
+        }
+    }
+
+    // ------------------------------------------------------------------ §3-1 시각 claim 의 표현 범위 (PR #33 리뷰)
+
+    @Nested
+    @DisplayName("§3-1 ★ 시각 claim 이 Instant 범위 밖이면 서버 오류가 아니라 401 (PR #33 리뷰)")
+    class 시각_범위 {
+
+        /**
+         * 올바른 입장 키로 서명했고 시각 claim 하나가 {@code long} 극단값인 토큰. 값은 {@code Date} 가 아니라 {@code Long} 으로
+         * 넣는다 — {@code Date.from} 은 이 값을 만들기 전에 예외를 내므로, 페이로드 원문에 그 정수가 그대로 있는지 확인한다.
+         */
+        private String outOfRange(String claim, long value) {
+            String token = TestAccessTokens.admission(NOW, USER, FIXTURE_SALE_EVENT_ID, s -> s.claim(claim, value));
+            String payload = new String(Base64.getUrlDecoder().decode(token.split("\\.")[1]),
+                    StandardCharsets.UTF_8);
+            assertThat(payload).as("생성 과정에서 값이 바뀌지 않았다").contains("\"" + claim + "\":" + value);
+            return token;
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp", "nbf"})
+        void long_극단값_시각_claim_은_401_ADMISSION_TOKEN_INVALID(String claim) throws Exception {
+            for (long value : new long[] {Long.MAX_VALUE, Long.MIN_VALUE}) {
+                int before = probe.invocations();
+                double claimsRejections = meters.counter("railgate.auth.admission", "outcome", "rejected", "reason", "claims").count();
+                String accessToken = access();
+                String token = outOfRange(claim, value);
+
+                HttpResponse<String> response = post(accessToken, token);
+
+                assertAdmissionInvalid(response, token, accessToken);
+                assertNothingChanged(before);
+                assertThat(meters.counter("railgate.auth.admission", "outcome", "rejected", "reason", "claims").count())
+                        .as("거부 사유는 claims").isEqualTo(claimsRejections + 1);
+            }
         }
     }
 

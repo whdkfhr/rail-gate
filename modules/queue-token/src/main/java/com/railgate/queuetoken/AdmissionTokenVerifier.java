@@ -10,6 +10,7 @@ import com.nimbusds.jose.crypto.MACVerifier;
 import com.nimbusds.jose.util.Base64URL;
 import java.text.ParseException;
 import java.time.Clock;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -39,7 +40,8 @@ import java.util.regex.Pattern;
  *   <li>{@code sub}·{@code evt} — <b>문자열</b>, 앞자리 0 없는 양수 {@code long} 10진수. 숫자 타입은 받지 않는다
  *       ({@code evt} 표현의 근거는 TASK-002J-C §2)</li>
  *   <li>{@code jti} — 비어 있지 않은 문자열</li>
- *   <li>{@code iat}·{@code exp}·{@code nbf} — 정수 JSON 숫자(초). 소수·문자열은 받지 않는다. {@code nbf} 는 선택</li>
+ *   <li>{@code iat}·{@code exp}·{@code nbf} — 정수 JSON 숫자(초)이고 {@link Instant} 표현 범위 안. 소수·문자열·범위 밖 값은
+ *       {@link AdmissionRejection#CLAIMS}. {@code nbf} 는 선택</li>
  *   <li>{@code aud} — 문자열 하나 또는 문자열 배열 (JWT 규격)</li>
  * </ul>
  *
@@ -52,6 +54,8 @@ public final class AdmissionTokenVerifier {
 
     private static final JOSEObjectType TYPE = new JOSEObjectType(TOKEN_TYPE);
     private static final Pattern POSITIVE_DECIMAL = Pattern.compile("[1-9][0-9]{0,18}");
+    private static final long MIN_EPOCH_SECOND = Instant.MIN.getEpochSecond();
+    private static final long MAX_EPOCH_SECOND = Instant.MAX.getEpochSecond();
 
     private final MACVerifier signature;
     private final AdmissionTokenPolicy policy;
@@ -65,6 +69,20 @@ public final class AdmissionTokenVerifier {
             this.signature = new MACVerifier(key.bytes());
         } catch (JOSEException e) {
             throw new IllegalArgumentException("입장 토큰 키로 HS256 검증기를 만들 수 없다");
+        }
+        requireSkewApplicable(clock.instant(), policy.clockSkew());
+    }
+
+    /**
+     * 설정 검증 — 현재 시각에 시계 오차를 더하고 뺄 수 있어야 한다. 그렇지 않은 설정은 모든 요청에서 예외를 내므로
+     * 토큰 오류가 아니라 <b>기동 실패</b>로 드러낸다. 토큰 입력과 무관한 검사다.
+     */
+    private static void requireSkewApplicable(Instant now, Duration clockSkew) {
+        try {
+            now.plus(clockSkew);
+            now.minus(clockSkew);
+        } catch (DateTimeException | ArithmeticException outOfRange) {
+            throw new IllegalArgumentException("clockSkew 가 시각 표현 범위를 넘는다");
         }
     }
 
@@ -107,26 +125,27 @@ public final class AdmissionTokenVerifier {
         Long userId = positiveDecimal(claims.get("sub"));
         Long saleEventId = positiveDecimal(claims.get("evt"));
         Object jti = claims.get("jti");
-        Long iat = integralSeconds(claims.get("iat"));
-        Long exp = integralSeconds(claims.get("exp"));
+        Instant issuedAt = epochSeconds(claims.get("iat"));
+        Instant expiresAt = epochSeconds(claims.get("exp"));
         boolean hasNbf = claims.containsKey("nbf");
-        Long nbf = hasNbf ? integralSeconds(claims.get("nbf")) : null;
+        Instant notBefore = hasNbf ? epochSeconds(claims.get("nbf")) : null;
         if (userId == null || saleEventId == null || !(jti instanceof String id) || id.isBlank()
-                || iat == null || exp == null || (hasNbf && nbf == null)) {
+                || issuedAt == null || expiresAt == null || (hasNbf && notBefore == null)) {
             return reject(AdmissionRejection.CLAIMS);
         }
 
-        Instant issuedAt = Instant.ofEpochSecond(iat);
-        Instant expiresAt = Instant.ofEpochSecond(exp);
+        // 시각 연산에서 토큰 값에는 덧셈·뺄셈을 하지 않는다 — 시계 오차는 현재 시각 쪽에 적용한다 (생성 시 적용 가능함을 확인).
+        // Duration.between 은 Instant 범위 안의 두 값이면 넘치지 않는다.
         if (!issuedAt.isBefore(expiresAt) || Duration.between(issuedAt, expiresAt).compareTo(policy.maxLifetime()) > 0) {
             return reject(AdmissionRejection.LIFETIME);
         }
         Instant now = clock.instant();
         Instant latestAcceptableStart = now.plus(policy.clockSkew());
-        if (issuedAt.isAfter(latestAcceptableStart) || (nbf != null && Instant.ofEpochSecond(nbf).isAfter(latestAcceptableStart))) {
+        if (issuedAt.isAfter(latestAcceptableStart) || (notBefore != null && notBefore.isAfter(latestAcceptableStart))) {
             return reject(AdmissionRejection.NOT_YET_VALID);
         }
-        if (now.isAfter(expiresAt.plus(policy.clockSkew()))) {
+        // now > exp + skew  ⇔  now - skew > exp (Instant 는 정확한 값이라 두 비교가 같다)
+        if (now.minus(policy.clockSkew()).isAfter(expiresAt)) {
             return reject(AdmissionRejection.EXPIRED);
         }
         return new AdmissionVerification.Accepted(new AdmissionClaims(userId, saleEventId, issuedAt, expiresAt, id));
@@ -154,15 +173,23 @@ public final class AdmissionTokenVerifier {
         }
     }
 
-    /** 정수 JSON 숫자(초)면 그 값, 아니면 {@code null}. 소수·문자열은 받지 않는다. */
-    private static Long integralSeconds(Object value) {
+    /**
+     * 정수 JSON 숫자(초)이고 {@link Instant} 표현 범위 안이면 그 시각, 아니면 {@code null}. 소수·문자열은 받지 않는다.
+     * 범위는 변환 전에 비교한다 — {@code Instant.ofEpochSecond} 의 예외를 잡지 않는다.
+     */
+    private static Instant epochSeconds(Object value) {
+        long seconds;
         if (value instanceof Long l) {
-            return l;
+            seconds = l;
+        } else if (value instanceof Integer i) {
+            seconds = i;
+        } else {
+            return null;
         }
-        if (value instanceof Integer i) {
-            return i.longValue();
+        if (seconds < MIN_EPOCH_SECOND || seconds > MAX_EPOCH_SECOND) {
+            return null;
         }
-        return null;
+        return Instant.ofEpochSecond(seconds);
     }
 
     /** {@code alg=none} 의 서명 없는 JWT 인가 — 헤더만 해석한다. */

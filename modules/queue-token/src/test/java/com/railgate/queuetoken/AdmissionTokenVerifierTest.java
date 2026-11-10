@@ -295,4 +295,120 @@ class AdmissionTokenVerifierTest {
             assertThat(key.toString()).doesNotContain(TestAdmissionTokens.ADMISSION_SECRET);
         }
     }
+
+    // ------------------------------------------------------------------ 시각 claim 의 표현 범위 (PR #33 리뷰)
+
+    @Nested
+    @DisplayName("§7 ★ 시각 claim 의 표현 범위 — 예외가 아니라 거부 (PR #33 리뷰)")
+    class 시각_범위 {
+
+        private static final long MAX_EPOCH = Instant.MAX.getEpochSecond();
+        private static final long MIN_EPOCH = Instant.MIN.getEpochSecond();
+
+        /** 올바른 키로 서명했고 {@code claim} 의 값이 페이로드에 <b>그 정수 그대로</b> 들어간 토큰. */
+        private String tokenWith(String claim, long value) {
+            String token = TestAdmissionTokens.token(NOW, USER, EVENT, s -> s.claim(claim, value));
+            assertThat(TestAdmissionTokens.payloadJson(token)).as("생성 과정에서 값이 바뀌지 않았다")
+                    .contains("\"" + claim + "\":" + value);
+            return token;
+        }
+
+        /**
+         * ★ RED 대상 — {@code Long.MAX_VALUE}·{@code Long.MIN_VALUE} 는 {@code Instant} 로 바꿀 수 없다. 수정 전에는
+         * {@code Instant.ofEpochSecond} 의 {@code DateTimeException} 이 검증 결과 대신 전파됐다.
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp", "nbf"})
+        void long_극단값은_예외_없이_CLAIMS_로_거부한다(String claim) {
+            for (long value : new long[] {Long.MAX_VALUE, Long.MIN_VALUE}) {
+                String token = tokenWith(claim, value);
+                assertThat(verifierAt(NOW).verify(token)).as(claim + "=" + value)
+                        .isEqualTo(rejected(AdmissionRejection.CLAIMS));
+            }
+        }
+
+        /** Instant 표현 범위의 바로 바깥 (±1초) 도 같은 거부다. */
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp", "nbf"})
+        void Instant_범위_바로_바깥은_CLAIMS_로_거부한다(String claim) {
+            assertThat(verifierAt(NOW).verify(tokenWith(claim, MAX_EPOCH + 1))).isEqualTo(rejected(AdmissionRejection.CLAIMS));
+            assertThat(verifierAt(NOW).verify(tokenWith(claim, MIN_EPOCH - 1))).isEqualTo(rejected(AdmissionRejection.CLAIMS));
+        }
+
+        /**
+         * Instant 범위 <b>안</b>의 끝값은 변환되므로 기존 시각 규칙이 그대로 판정한다 — 이번 수정이 바꾸지 않는 계약.
+         * 이 입력들은 수명·미래 검사에서 먼저 거부되거나 통과할 뿐, 시계 오차 덧셈의 오버플로를 검증하지 않는다
+         * (그 검증은 {@link #시계_오차를_더하면_범위를_넘는_exp_는_만료_비교에서_예외를_내지_않는다}).
+         */
+        @Test
+        void Instant_범위의_끝값은_기존_시각_규칙으로_판정한다() {
+            assertThat(verifierAt(NOW).verify(tokenWith("exp", MAX_EPOCH))).isEqualTo(rejected(AdmissionRejection.LIFETIME));
+            assertThat(verifierAt(NOW).verify(tokenWith("iat", MIN_EPOCH))).isEqualTo(rejected(AdmissionRejection.LIFETIME));
+            assertThat(verifierAt(NOW).verify(tokenWith("exp", MIN_EPOCH))).isEqualTo(rejected(AdmissionRejection.LIFETIME));
+            assertThat(verifierAt(NOW).verify(tokenWith("iat", MAX_EPOCH))).isEqualTo(rejected(AdmissionRejection.LIFETIME));
+            assertThat(verifierAt(NOW).verify(tokenWith("nbf", MAX_EPOCH))).isEqualTo(rejected(AdmissionRejection.NOT_YET_VALID));
+            assertThat(verifierAt(NOW).verify(tokenWith("nbf", MIN_EPOCH))).isInstanceOf(AdmissionVerification.Accepted.class);
+        }
+
+        /**
+         * ★ 변환은 되지만 {@code exp + 시계 오차} 가 Instant 범위를 넘는 입력이 <b>실제로 만료 비교에 도달</b>하는 경우.
+         * 기본 정책(최대 수명 10분)에서는 수명 검사가 먼저 거부해 도달하지 않으므로, 최대 수명을 무제한에 가깝게 둔 정책으로
+         * 수명·미래 검사를 통과시킨다. 결과가 {@code Accepted} 라는 것이 만료 비교까지 평가됐다는 근거다.
+         * 수정 전에는 {@code expiresAt.plus(clockSkew)} 의 {@code DateTimeException} 이 전파됐다.
+         */
+        @ParameterizedTest
+        @ValueSource(longs = {0, 1, 29})
+        void 시계_오차를_더하면_범위를_넘는_exp_는_만료_비교에서_예외를_내지_않는다(long belowMax) {
+            AdmissionTokenVerifier unlimitedLifetime = new AdmissionTokenVerifier(
+                    AdmissionTokenKey.fromBase64("test.secret", TestAdmissionTokens.ADMISSION_SECRET),
+                    new AdmissionTokenPolicy(AdmissionTokenPolicy.DEFAULT_ISSUER, AdmissionTokenPolicy.DEFAULT_AUDIENCE,
+                            AdmissionTokenPolicy.DEFAULT_CLOCK_SKEW, Duration.ofSeconds(Long.MAX_VALUE)),
+                    Clock.fixed(NOW, ZoneOffset.UTC));
+            long exp = MAX_EPOCH - belowMax;
+
+            assertThat(unlimitedLifetime.verify(tokenWith("exp", exp))).isInstanceOf(AdmissionVerification.Accepted.class);
+        }
+
+        /** 만료 비교를 바꿔도 30초 경계는 그대로다 — 기존 §5 와 같은 입력을 다른 정책 객체로 한 번 더 확인한다. */
+        @Test
+        void 만료_경계는_그대로다() {
+            String exp60 = tokenWith("exp", NOW.plusSeconds(60).getEpochSecond());
+            assertThat(verifierAt(NOW.plusSeconds(90)).verify(exp60)).isInstanceOf(AdmissionVerification.Accepted.class);
+            assertThat(verifierAt(NOW.plusSeconds(90).plusNanos(1)).verify(exp60))
+                    .isEqualTo(rejected(AdmissionRejection.EXPIRED));
+        }
+
+        /** {@code long} 을 넘는 JSON 정수는 정수 타입으로 파싱되지 않아 타입 검사에서 거부된다 (원문 페이로드로 확인). */
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp", "nbf"})
+        void long_을_넘는_JSON_정수는_CLAIMS_로_거부한다(String claim) {
+            for (String huge : new String[] {"9223372036854775808", "-9223372036854775809", "100000000000000000000000"}) {
+                String payload = "{\"iss\":\"railgate-queue\",\"aud\":\"railgate-reservation\",\"token_use\":\"admission\","
+                        + "\"sub\":\"" + USER + "\",\"evt\":\"" + EVENT + "\",\"jti\":\"j-1\","
+                        + "\"iat\":" + NOW.getEpochSecond() + ",\"exp\":" + NOW.plusSeconds(300).getEpochSecond()
+                        + ",\"" + claim + "\":" + huge + "}";
+                String token = TestAdmissionTokens.signedRaw(payload.replace(
+                        "\"" + claim + "\":" + (claim.equals("iat") ? NOW.getEpochSecond()
+                                : NOW.plusSeconds(300).getEpochSecond()) + ",", ""));
+                assertThat(TestAdmissionTokens.payloadJson(token)).contains("\"" + claim + "\":" + huge);
+                assertThat(verifierAt(NOW).verify(token)).as(claim + "=" + huge)
+                        .isEqualTo(rejected(AdmissionRejection.CLAIMS));
+            }
+        }
+
+        /**
+         * 설정 문제는 토큰 오류와 구분한다 — 시계 오차를 현재 시각에 더하거나 뺄 수 없을 만큼 큰 설정은 요청마다 예외를 내므로
+         * <b>생성(기동) 시</b> 거부한다.
+         */
+        @Test
+        void 현재_시각에_더할_수_없는_시계_오차_설정은_생성_시_거부한다() {
+            AdmissionTokenPolicy huge = new AdmissionTokenPolicy(AdmissionTokenPolicy.DEFAULT_ISSUER,
+                    AdmissionTokenPolicy.DEFAULT_AUDIENCE, Duration.ofSeconds(Long.MAX_VALUE), Duration.ofMinutes(10));
+            assertThatThrownBy(() -> new AdmissionTokenVerifier(
+                    AdmissionTokenKey.fromBase64("test.secret", TestAdmissionTokens.ADMISSION_SECRET), huge,
+                    Clock.fixed(NOW, ZoneOffset.UTC)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("clockSkew");
+        }
+    }
 }
