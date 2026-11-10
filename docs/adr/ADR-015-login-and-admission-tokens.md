@@ -3,8 +3,9 @@
 > 상태: **부분 채택** — 토큰 분리(§3~§5)와 **D-A2(HS256 + 용도별 키)·D-A3(`evt` = `sale_event.id`)** 채택 (2026-10-30, Task 2J-B).
 > D-A5(검증 라이브러리)는 [ADR-016](ADR-016-access-token-validation-library.md) 로 결정. **D-A1·D-A4 는 결정 대기.** 제안 2026-10-25 (Task 2J-A).
 >
-> **구현 상태** — reservation-service 의 **액세스 토큰 검증(§3)만** 있다 ([TASK-002J-B](../experiments/TASK-002J-B-access-token-validation.md)).
-> 입장 토큰 검증(§4)·사용자 대조(§5)·발급 엔드포인트·개발 전용 발급(§6)은 없다.
+> **구현 상태** — 액세스 토큰 검증(§3, [TASK-002J-B](../experiments/TASK-002J-B-access-token-validation.md)),
+> **입장 토큰 검증(§4)과 두 토큰의 사용자 대조(§5 의 1)** ([TASK-002J-C](../experiments/TASK-002J-C-admission-token-validation.md)).
+> 입장 `evt` 와 요청 좌석 회차의 대조(§5 의 2)는 Task 2J-D, 발급 엔드포인트·개발 전용 발급(§6)·blocklist 는 없다.
 >
 > 관련: [REQUIREMENTS.md](../REQUIREMENTS.md) FR-2.1·P-9·P-13, [INVARIANTS.md](../INVARIANTS.md) I-6·I-7·I-20,
 > [ARCHITECTURE.md](../ARCHITECTURE.md) §5.2, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md), CLAUDE.md 절대 규칙 3·4, 규칙 34
@@ -67,13 +68,14 @@
 | 전달 | `Admission-Token: <token>` 헤더. `Authorization` 에 넣지 않는다 |
 | 형식 | JWS(JWT), `alg=HS256` 만 허용 |
 | 헤더 | `typ: "admission+jwt"` |
-| claim | `iss="railgate-queue"`, `aud="railgate-reservation"`, `sub`=사용자 id, `evt`=판매 회차 id, `iat`, `exp`, `jti`, `token_use="admission"` |
+| claim | `iss="railgate-queue"`, `aud="railgate-reservation"`(문자열 또는 문자열 배열), `sub`=사용자 id, `evt`=판매 회차 id, `iat`, `exp`, `jti`, `token_use="admission"`. 선택 `nbf` |
+| **claim 타입** (Task 2J-C) | `sub`·`evt` = **양수 `long` 10진 문자열**(앞자리 0 없음, 숫자 타입 거부), `jti` = 비어 있지 않은 문자열, `iat`·`exp`·`nbf` = 정수 JSON 숫자(초), `Instant` 표현 범위 안(밖이면 `CLAIMS`, TASK-002J-C §8). `evt` 표현의 근거는 TASK-002J-C §2 |
 | 수명 | P-7 의 Active 세션 TTL(수령 후 10분)을 넘지 않는다 — **10분 (가정값)** |
 | 서명키 | **입장 토큰 전용 키** `K_admission`. `K_access` 와 다른 값이어야 한다 (기동 시 같으면 실패) |
 | 검증 위치 | reservation-service 필터. **queue-service·Redis 로의 네트워크 호출 없이** 서명만으로 판정 (I-7, 절대 규칙 4) |
 | 검증 | 서명(`K_admission`), `alg`, `typ`, `iss`, `aud`, `token_use`, `exp`, `iat`, `sub`·`evt` 형식, 시계 오차 30초(가정) |
-| 실패 | **401** `ADMISSION_TOKEN_INVALID` (없음·만료·서명·형식) |
-| 코드 위치 | **[제안]** claim 모델과 검증기는 두 앱의 유일한 공통 접점인 `modules/queue-token` 에 둔다 (절대 규칙 3) |
+| 실패 | **401** `ADMISSION_TOKEN_INVALID` (없음·헤더 중복·쉼표 결합·빈 값·만료·서명·형식·용도) + `WWW-Authenticate: Admission-Token` |
+| 코드 위치 | claim 모델과 검증기는 `modules/queue-token`(`AdmissionTokenVerifier`) — Spring·Servlet 없이 Nimbus JOSE+JWT 만 쓴다 (Task 2J-C) |
 
 **blocklist**(ARCHITECTURE §5.2 — 취소·강제 만료 시 Redis 조회)는 이번 범위가 아니다. Redis 장애 시 정책은 ADR-011(작성 예정,
 fail-closed)이 정한다. 서명 검증 자체는 Redis 와 무관하다.

@@ -76,6 +76,25 @@ public final class TestAccessTokens {
         return sign(spec);
     }
 
+    /**
+     * 테스트 전용 <b>입장 토큰</b> (ADR-015 §4). 액세스 토큰과 다른 키({@link #OTHER_SECRET_BASE64})·{@code typ}·{@code iss}·
+     * {@code aud}·{@code token_use} 를 쓰고 {@code evt} 는 10진 문자열이다. 운영 소스에는 발급기가 없다.
+     */
+    public static String admission(Instant now, long userId, long saleEventId, Consumer<Spec> customizer) {
+        Spec spec = new Spec(now, userId);
+        spec.secretBase64 = OTHER_SECRET_BASE64;
+        spec.typ = "admission+jwt";
+        spec.claim("iss", "railgate-queue").claim("aud", List.of("railgate-reservation"))
+                .claim("token_use", "admission").claim("evt", Long.toString(saleEventId))
+                .claim("exp", Date.from(now.plus(Duration.ofMinutes(5))));
+        customizer.accept(spec);
+        return sign(spec);
+    }
+
+    public static String admission(Instant now, long userId, long saleEventId) {
+        return admission(now, userId, saleEventId, spec -> { });
+    }
+
     /** {@code alg=none} 의 서명 없는 토큰. */
     public static String unsigned(Instant now, long userId) {
         Spec spec = new Spec(now, userId);
