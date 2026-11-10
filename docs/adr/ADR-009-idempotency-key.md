@@ -114,6 +114,11 @@ fingerprint 를 조건에 더해도 같은 요청으로 키를 재사용하면 �
   뒤의 TX1 은 아무 키 행도 쥐지 않았다 — 순환이 없다.
 - 같은 키의 요청은 앞선 TX1 의 **완료 UPDATE 후 커밋 전** 짧은 구간 동안 TX0 에서 기다린다 (실험 §5 표의 테스트 §3 세 번째 — `performance_schema.data_lock_waits` 로 관측).
   대기 상한은 `innodb_lock_wait_timeout = 3` 이고(규칙 9), 초과하면 재시도 가능한 장애다.
+- **TX0 끼리의 데드락** (PR #32, 2026-11-10 관측) — 같은 키 행을 지우는 트랜잭션 뒤에서 기다리거나 삭제 표시만 남은 같은 키 위로
+  INSERT 가 몰리면, INSERT 들이 그 레코드에 S 잠금을 함께 얻고 서로의 S 때문에 X 를 얻지 못해 하나가 1213 으로 롤백된다.
+  TX0 는 실패하면 아무것도 남기지 않으므로 조정자는 **1213 일 때만** 새 TX0 에서 호출당 3회까지 다시 한다
+  ([TASK-002J-B](../experiments/TASK-002J-B-access-token-validation.md) §7). 위 순환 부재 논증은 TX0·TX1·TX2 사이에 대한 것이며,
+  TX0 끼리의 이 데드락은 포함하지 않았다.
 
 ### 3.3 커넥션
 
@@ -145,7 +150,7 @@ Task 2I-A 에서는 규칙과 불변식을 바꾸지 않았다. **Task 2I-B 에�
 |---|---|
 | C1 | **채택** (2026-10-12) — CLAUDE.md 규칙 16 정정 |
 | C2 | **채택** (2026-10-12) — INVARIANTS.md I-18 보장 메커니즘 정정, 보장 범위를 "같은 키의 같은 세대" 로 명시 |
-| C3 | **채택** (2026-10-25, Task 2J-A) — 진행 중·소유권 상실은 `409` + `code=IDEMPOTENCY_REQUEST_IN_PROGRESS` + `Retry-After`(초 단위, 초기값 1초는 가정), 좌석 경합 `409` 는 `code=SEAT_UNAVAILABLE`. CLAUDE.md 규칙 21 을 코드별 의미로 확장. 매핑 전체는 [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md) §6. **HTTP 구현은 아직 없다** |
+| C3 | **채택** (2026-10-25, Task 2J-A) — 진행 중·소유권 상실은 `409` + `code=IDEMPOTENCY_REQUEST_IN_PROGRESS` + `Retry-After`(초 단위, 초기값 1초는 가정), 좌석 경합 `409` 는 `code=SEAT_UNAVAILABLE`. CLAUDE.md 규칙 21 을 코드별 의미로 확장. 상한 초과도 `409 QUOTA_EXCEEDED`(D3, 2026-10-30), 재생 응답과 traceId 는 D1 B 채택. 매핑 전체는 [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md) §6. **HTTP 구현은 아직 없다** |
 | C4 | **미결정** — 리스·보존 수치는 여전히 가정. 저장소는 리스를 호출자에게서 받고 기본값을 두지 않는다 |
 
 아래는 각 항목의 원래 제안이다 (채택 전 배경).
@@ -168,5 +173,5 @@ Task 2I-A 에서는 규칙과 불변식을 바꾸지 않았다. **Task 2I-B 에�
    고쳤다 (TASK-002I-B §9)
 2. ~~**애플리케이션 연결** — `HoldSeatsService` 앞단의 TX0/TX1/TX2 조정자, Micrometer 메트릭(재생·진행 중·불일치·인수·fence 거절)~~ —
    **완료** (Task 2I-C, `IdempotentHoldService`). 서비스 수준 연결이며 HTTP 진입점은 3 이다
-3. **인증·HTTP 경계** — 인증 주체에서 `userId`, `Idempotency-Key` 필수(누락 400), 상태 코드 매핑(C3 채택, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md)), 응답 본문 직렬화(재생과 traceId — 같은 문서 D1 결정 대기)
+3. **인증·HTTP 경계** — 인증 주체에서 `userId`, `Idempotency-Key` 필수(누락 400), 상태 코드 매핑(C3 채택, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md)), 응답 본문 직렬화(재생과 traceId — 같은 문서 D1 채택)
 4. 해제·확정·결제 시작에 같은 계약을 **각각** 적용할지 판단 — 이번에 범용화하지 않았다

@@ -53,6 +53,8 @@ public abstract class MySqlSpringTestSupport {
         registry.add("spring.datasource.url", MYSQL::getJdbcUrl);
         registry.add("spring.datasource.username", MYSQL::getUsername);
         registry.add("spring.datasource.password", MYSQL::getPassword);
+        // Task 2J-B. 액세스 토큰 서명키는 운영 기본값이 없어 반드시 외부에서 받는다. 테스트 전용 키다.
+        registry.add("railgate.auth.access-token.secret", () -> TestAccessTokens.ACCESS_SECRET_BASE64);
     }
 
     @Autowired

@@ -36,6 +36,10 @@ dependencies {
     // 실제로 "Table 'railgate.seat_inventory' doesn't exist" 로 관측했다.
     runtimeOnly("org.springframework.boot:spring-boot-flyway")
 
+    // Task 2J-B. 로그인 액세스 토큰의 로컬 검증 (ADR-015 §3, ADR-016).
+    // issuer-uri·jwk-set-uri 를 쓰지 않는다 — 요청 중 원격 키 조회가 없다.
+    implementation(libs.spring.boot.starter.security.oauth2.resource.server)
+
     // 통합 테스트는 실제 MySQL 로만 한다 (CLAUDE.md 규칙 26).
     testImplementation(libs.testcontainers.mysql)
     testImplementation(libs.testcontainers.junit)

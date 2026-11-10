@@ -13,7 +13,10 @@ import com.railgate.reservation.idempotency.RequestFingerprint;
 import com.railgate.reservation.idempotency.StoredHoldOutcome.Rejected;
 import com.railgate.reservation.idempotency.StoredHoldOutcome.Succeeded;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.sql.SQLException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
@@ -21,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -61,6 +65,24 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 붙인다. TX0·TX1·TX2 는 순차라 요청 하나가 동시에 쥐는 커넥션은 최대 1개다. 그래서 <b>바깥 트랜잭션 안에서 부르면
  * 키를 건드리기 전에 거부한다</b> — {@code REQUIRES_NEW} 가 바깥 커넥션을 쥔 채 두 번째 커넥션을 잡기 때문이다.
  *
+ * <h2>TX0 의 MySQL 데드락(1213)만 제한적으로 재시도한다 (PR #32)</h2>
+ *
+ * <p>같은 키를 지우는 트랜잭션과 겹치거나 삭제 표시만 남은 같은 키 행 위로 동시 INSERT 가 몰리면, INSERT 들이 그 행에
+ * S 잠금을 함께 얻은 뒤 서로의 S 때문에 X 를 얻지 못해 InnoDB 가 하나를 1213 으로 롤백한다 (TASK-002J-B §7 에서 관측).
+ * TX0 의 INSERT·인수는 실패하면 아무것도 남기지 않으므로 <b>그 트랜잭션이 롤백으로 끝나 커넥션을 돌려준 뒤 새 TX0 에서</b>
+ * 같은 문장을 다시 한다. 대기하지 않는다 — 이긴 쪽은 한 문장짜리 TX0 라 곧 커밋되고, 재시도는 DB 잠금 대기로 그 커밋을
+ * 기다린다.
+ *
+ * <ul>
+ *   <li><b>대상</b> — 원인 사슬에 vendor code {@value #MYSQL_DEADLOCK} 인 {@link SQLException} 이 있는 예외만.
+ *       {@code CannotAcquireLockException} 이라는 상위 타입만으로는 재시도하지 않는다. 잠금 대기 초과(1205)·연결 장애는 그대로 전파한다</li>
+ *   <li><b>범위</b> — TX0 의 INSERT 와 인수 UPDATE. 조회는 잠그지 않는 일관 읽기라 데드락 희생자가 될 수 없어 감싸지 않는다(나면 그대로 전파).
+ *       TX1·TX2·리스 포기는 재시도하지 않는다 — 본 작업 재실행이나 커밋 결과 불명 처리를 바꾸지 않는다</li>
+ *   <li><b>상한</b> — 호출 하나당 재시도 {@value #TX0_DEADLOCK_RETRY_BUDGET} 회 (여러 TX0 문장이 나눠 쓴다)</li>
+ *   <li><b>소진</b> — 마지막 데드락 예외를 그대로 던지고 앞의 것을 suppressed 로 남긴다. 중복·진행 중·업무 실패로 바꾸지 않는다.
+ *       재시도 중 다른 장애가 나면 그 장애를 던지고 앞의 데드락을 함께 남긴다</li>
+ * </ul>
+ *
  * <h2>{@link Error} 는 잡지 않는다</h2>
  *
  * <p>프로세스가 그 자리에서 죽은 것과 같게 다룬다. 열린 트랜잭션은 롤백되고 키는 리스 만료 뒤 인수된다.
@@ -94,9 +116,17 @@ public class IdempotentHoldService {
 
     /**
      * 삽입·조회·인수 사이에 행이 바뀌면 처음부터 다시 본다. 그 횟수의 상한.
-     * 소진하면 "진행 중" 으로 답한다 — 실행하지 않는 쪽으로 물러선다. DB 장애는 이 재시도와 무관하게 그대로 전파한다.
+     * 소진하면 "진행 중" 으로 답한다 — 실행하지 않는 쪽으로 물러선다. DB 장애는 이 라운드와 무관하다 — TX0 의 MySQL
+     * 데드락만 {@link #TX0_DEADLOCK_RETRY_BUDGET} 안에서 새 트랜잭션으로 다시 하고, 그 밖의 DB 장애는 그대로 전파한다.
      */
     static final int MAX_ACQUIRE_ROUNDS = 3;
+
+    /** 호출 하나당 TX0(INSERT·인수) 데드락 재시도 횟수의 상한. 최초 시도를 빼고 센다. */
+    static final int TX0_DEADLOCK_RETRY_BUDGET = 3;
+
+    static final int MYSQL_DEADLOCK = 1213;
+
+    static final String TX0_DEADLOCKS = "railgate.idempotency.hold.tx0_deadlocks";
 
     private static final Logger log = LoggerFactory.getLogger(IdempotentHoldService.class);
 
@@ -188,8 +218,9 @@ public class IdempotentHoldService {
     // ------------------------------------------------------------------ TX0
 
     private Acquired acquire(IdempotencyScope scope, RequestFingerprint fingerprint) {
+        DeadlockBudget budget = new DeadlockBudget();
         for (int round = 0; round < MAX_ACQUIRE_ROUNDS; round++) {
-            Optional<KeyOwnership> inserted = requiresNew.execute(
+            Optional<KeyOwnership> inserted = tx0("insert", budget,
                     status -> keys.tryInsert(scope, fingerprint, lease));
             if (inserted != null && inserted.isPresent()) {
                 return new Acquired.Owned(inserted.get());
@@ -211,7 +242,7 @@ public class IdempotentHoldService {
                     return new Acquired.Answered(new IdempotentHoldResult.InProgress());
                 }
                 case TAKE_OVER -> {
-                    Optional<KeyOwnership> taken = requiresNew.execute(
+                    Optional<KeyOwnership> taken = tx0("takeover", budget,
                             status -> keys.takeOver(scope, current.ownership(), lease));
                     if (taken != null && taken.isPresent()) {
                         count(TAKEOVERS);
@@ -223,6 +254,51 @@ public class IdempotentHoldService {
             }
         }
         return new Acquired.Answered(new IdempotentHoldResult.InProgress());
+    }
+
+    /** 호출 하나의 데드락 재시도 예산. */
+    private static final class DeadlockBudget {
+        private int remaining = TX0_DEADLOCK_RETRY_BUDGET;
+    }
+
+    /**
+     * TX0 문장 하나를 새 트랜잭션에서 실행하고, MySQL 데드락이면 그 트랜잭션이 롤백으로 끝난 뒤 새 트랜잭션에서 다시 한다.
+     * {@link TransactionTemplate} 은 예외를 다시 던지기 전에 롤백과 커넥션 반환을 마친다 — 재시도와 커넥션이 겹치지 않는다.
+     */
+    private <T> T tx0(String statement, DeadlockBudget budget, TransactionCallback<T> work) {
+        List<RuntimeException> deadlocks = new ArrayList<>();
+        while (true) {
+            try {
+                return requiresNew.execute(work);
+            } catch (RuntimeException failure) {
+                if (!isMySqlDeadlock(failure)) {
+                    deadlocks.forEach(failure::addSuppressed);
+                    throw failure;
+                }
+                if (budget.remaining == 0) {
+                    deadlocks.forEach(failure::addSuppressed);
+                    count(TX0_DEADLOCKS, "statement", statement, "outcome", "exhausted");
+                    log.warn("멱등 선점 TX0 의 데드락 재시도를 모두 썼다 — 장애로 전파한다");
+                    throw failure;
+                }
+                budget.remaining--;
+                deadlocks.add(failure);
+                count(TX0_DEADLOCKS, "statement", statement, "outcome", "retried");
+            }
+        }
+    }
+
+    /** 원인 사슬에 MySQL vendor code 1213 이 있는가. 상위 예외 타입만 보고 판단하지 않는다. */
+    static boolean isMySqlDeadlock(Throwable failure) {
+        for (Throwable t = failure; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sql && sql.getErrorCode() == MYSQL_DEADLOCK) {
+                return true;
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------ TX1 · TX2

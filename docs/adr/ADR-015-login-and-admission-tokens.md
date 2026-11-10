@@ -1,7 +1,10 @@
 # ADR-015 — 로그인 액세스 토큰과 입장 토큰의 분리
 
-> 상태: **제안** (2026-10-25, Task 2J-A). §3~§5 의 토큰 형식·검증 규칙은 이 Task 에서 **설계 확정**하고, §6 발급 방식과
-> §8 의 항목은 **결정 대기**다. **구현 없음** — 검증 필터·발급 엔드포인트·서명키 설정·JWT 의존성은 아직 없다.
+> 상태: **부분 채택** — 토큰 분리(§3~§5)와 **D-A2(HS256 + 용도별 키)·D-A3(`evt` = `sale_event.id`)** 채택 (2026-10-30, Task 2J-B).
+> D-A5(검증 라이브러리)는 [ADR-016](ADR-016-access-token-validation-library.md) 로 결정. **D-A1·D-A4 는 결정 대기.** 제안 2026-10-25 (Task 2J-A).
+>
+> **구현 상태** — reservation-service 의 **액세스 토큰 검증(§3)만** 있다 ([TASK-002J-B](../experiments/TASK-002J-B-access-token-validation.md)).
+> 입장 토큰 검증(§4)·사용자 대조(§5)·발급 엔드포인트·개발 전용 발급(§6)은 없다.
 >
 > 관련: [REQUIREMENTS.md](../REQUIREMENTS.md) FR-2.1·P-9·P-13, [INVARIANTS.md](../INVARIANTS.md) I-6·I-7·I-20,
 > [ARCHITECTURE.md](../ARCHITECTURE.md) §5.2, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md), CLAUDE.md 절대 규칙 3·4, 규칙 34
@@ -96,8 +99,8 @@ fail-closed)이 정한다. 서명 검증 자체는 Redis 와 무관하다.
 1. 입장 토큰 `sub` = 액세스 토큰 `sub` — 아니면 **403** `ADMISSION_USER_MISMATCH` (I-6: 유출된 입장 토큰을 남이 못 쓴다)
 2. 입장 토큰 `evt` = 요청 좌석에서 서버가 해석한 판매 회차 — 아니면 **403** `ADMISSION_EVENT_MISMATCH`
 
-대기열의 `event` 와 예약의 `SaleEvent` 가 같은 식별자 공간인지는 아직 정하지 않았다(ARCHITECTURE §3-1 "대기열 입장 범위").
-이 ADR 은 **`evt` = `sale_event.id`** 를 전제로 한다 — 다르게 정해지면 대조 규칙을 매핑 기준으로 바꾼다 (§8 D-A3).
+**[채택] D-A3** — 입장 토큰의 `evt` 는 **`sale_event.id` 와 같은 식별자 공간**이다 (2026-10-30). 대기열은 판매 회차 단위로
+입장을 제어하고 별도 매핑 테이블을 두지 않는다. 대기열을 더 잘게 나눠야 하면 그때 이 결정을 다시 연다.
 
 ### 401 과 403 의 기준
 
@@ -122,7 +125,21 @@ P-13 은 "간이 JWT 발급 엔드포인트, OAuth 미도입" 이다. **임의�
 로컬 개발·부하 테스트에 사용자 수천 명의 토큰이 필요하면 개발 전용 발급을 둘 수 있다. 조건:
 
 - **기본 비활성.** `railgate.auth.dev-issuer.enabled=false` 가 기본이며, 켜려면 명시적 설정이 필요하다
-- **운영 프로필에서 켜지면 기동 실패** — 활성 프로필에 `local`·`loadtest` 외의 것이 있으면 시작하지 않는다
+- **활성 조건 (모두 만족해야 기동)** — ① `enabled=true` ② **명시적으로 활성화한 프로필이 하나 이상** 있다 ③ **모든** 활성
+  프로필이 `local`·`loadtest` 에 속한다. 하나라도 어기면 **기동 실패**다. 프로필이 없는 기본 실행을 개발 환경으로 간주하지 않는다
+
+  | 활성 프로필 (`enabled=true`) | 결과 |
+  |---|---|
+  | (없음) | **거부** — 기동 실패 |
+  | `prod` | **거부** |
+  | `local` + `prod` | **거부** — 하나라도 허용 목록 밖 |
+  | `staging`·`test` 등 그 밖의 이름 | **거부** |
+  | `local` | 허용 |
+  | `loadtest` | 허용 |
+  | `local` + `loadtest` | 허용 |
+  | (`enabled=false`, 어떤 프로필이든) | 개발 발급 없음, 기동 정상 |
+
+  **개발 발급기 자체는 아직 구현하지 않았다** — 위 표는 구현 Task(2J-E)의 인수 시나리오다
 - **별도 issuer** — 개발 발급 토큰의 `iss="railgate-dev-auth"`. 운영 검증기는 이 issuer 를 거부하고, 개발 발급이 켜진
   환경의 검증기만 받아들인다. 같은 키로 서명하더라도 운영에서 통과하지 않는다
 - 경로는 운영 API 와 섞지 않는다 (예: `/dev/auth/token`)
@@ -152,8 +169,8 @@ queue-service 입장 토큰 발급은 Phase 2 다. 그 전까지 선점 HTTP 테
 
 | # | 항목 | 권장안 |
 |---|---|---|
-| D-A1 | 간이 발급의 신원 확인 (§6) | A1 — 비밀번호 해시 + 발급 엔드포인트 |
-| D-A2 | 서명 알고리즘 | MVP 는 HS256 + 용도별 키. 입장 토큰은 ES256 전환을 Phase 2 에서 재검토 |
-| D-A3 | 대기열 `event` 와 `sale_event.id` 의 관계 | 같은 id 공간 (이 ADR 의 전제) |
-| D-A4 | 수명·시계 오차 (30분·10분·30초) | 가정값. 측정·운영 요구로 정한다 |
-| D-A5 | JWT 라이브러리 | 구현 Task 에서 ADR 로 선택 (Spring Security OAuth2 Resource Server 의 Nimbus, jjwt 등). 새 의존성은 `libs.versions.toml` 에 먼저 등록 |
+| D-A1 | 간이 발급의 신원 확인 (§6) | **결정 대기** — 권장 A1(비밀번호 해시 + 발급 엔드포인트) |
+| D-A2 | 서명 알고리즘 | **채택 (2026-10-30)** — MVP 는 HS256 + 용도별 키 분리. 입장 토큰의 ES256 전환은 Phase 2 에서 재검토 |
+| D-A3 | 대기열 `event` 와 `sale_event.id` 의 관계 | **채택 (2026-10-30)** — 같은 식별자 공간 (§5) |
+| D-A4 | 수명·시계 오차 (30분·10분·30초) | **결정 대기** — 가정값으로 설정·테스트만 한다. 측정·운영 요구로 정한다 |
+| D-A5 | JWT 라이브러리 | **결정 (2026-10-30)** — [ADR-016](ADR-016-access-token-validation-library.md): Spring Security OAuth2 Resource Server 의 JWT 로컬 검증 |

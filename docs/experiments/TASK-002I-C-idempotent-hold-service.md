@@ -49,6 +49,7 @@ hold(key, command)
       진행 중    → InProgress
       만료       → 새 트랜잭션에서 takeOver(스냅숏 소유권) → 성공이면 실행으로, 실패면 다음 라운드
     라운드 소진  → InProgress            (DB 장애는 라운드와 무관하게 그대로 전파)
+                 ※ PR #32 이후: TX0 INSERT·인수의 MySQL 데드락(1213)만 새 TX0 에서 호출당 3회까지 재시도 (TASK-002J-B §7)
 
   TX1 (REQUIRED)  HoldSeatsService.hold → completeSucceeded(소유권)
                   NOT_OWNER → TX1 전체 롤백 → OwnershipLost

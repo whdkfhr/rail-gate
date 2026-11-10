@@ -30,7 +30,8 @@ management:
         include: health,info,metrics
   endpoint:
     health:
-      show-details: always
+      # Task 2J-B. health 는 토큰 없이 열려 있으므로 DB 등 구성 요소 상세를 내보내지 않는다.
+      show-details: never
 
 logging:
   level:

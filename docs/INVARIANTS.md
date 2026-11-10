@@ -62,6 +62,10 @@
 
 ### I-7. 입장 권한이 없는 사용자는 좌석 예매 API를 사용할 수 없다
 
+> **현재 상태 — 아직 강제되지 않는다 (Task 2J-B).** reservation-service 에 **로그인 액세스 토큰 검증**(ADR-015 §3)과
+> 기본 거부 필터 체인이 생겨 *신원이 없는* 요청은 401 이다. 그러나 **입장 토큰 검증(ADR-015 §4)과 두 토큰의 사용자 대조(§5)가
+> 없어서**, 신원만 증명한 사용자가 대기열을 거쳤는지는 판정하지 않는다. 좌석 API 자체도 아직 없다. → Task 2J-C·2J-D.
+
 - **보장 메커니즘** — `reservation-service` 의 필터에서 토큰 검증. **queue-service 로의 네트워크 호출 없이** 서명만으로 판정한다.
 - **깨지는 조건** — 검증 실패 시 통과시키는 fail-open 정책. Redis 장애 시 전원 입장 → MySQL 붕괴.
 - **검증 방법** — 토큰 없이 / 만료 토큰으로 좌석 API 호출 → 401. `T-8`: Redis 중지 중에도 무효 토큰이 차단되는지.
@@ -172,14 +176,14 @@
    WHERE sale_event_id = :saleEventId
      AND user_id       = :userId
      AND held_seats + :n <= 4;
-  -- affected = 0 → 429 QUOTA_EXCEEDED
+  -- affected = 0 → 409 QUOTA_EXCEEDED (HOLD_HTTP_CONTRACT D3, 2026-10-30. 이전 문서는 429)
   ```
 - **PRIMARY KEY 와 잠금 순서** — `(sale_event_id, user_id)`.
   여러 quota 행을 잠그는 경로(만료 배치)는 그 키의 **오름차순**으로 잠근 뒤 좌석을 갱신한다
   (quota → seat, [TASK-002G-B](experiments/TASK-002G-B-quota-lock-order.md)).
 - **깨지는 조건** — `SELECT COUNT(*) WHERE held_by=:userId` 로 검증하면 **다른 트랜잭션의 미커밋 홀드가 보이지 않는다.** 같은 사용자가 3석 요청 2개를 동시에 보내면 둘 다 "내 것 3석"만 보고 통과해 6석을 점유한다.
   범위를 운행편으로 잡아도 같은 결과가 된다 — 카운터 행 자체가 분리되기 때문이다.
-- **검증 방법** — 동일 사용자가 3석 요청 2개를 동시 전송 → 하나만 201, 하나는 429. 실제 `HELD` 좌석 수 ≤ 4.
+- **검증 방법** — 동일 사용자가 3석 요청 2개를 동시 전송 → 하나만 201, 하나는 409 `QUOTA_EXCEEDED`. 실제 `HELD` 좌석 수 ≤ 4.
   같은 판매 이벤트의 **서로 다른 운행편**으로 보내도 결과가 같아야 한다.
 
 ### I-13. 판매된 좌석 수 ≤ 해당 스케줄의 총 좌석 수
@@ -226,7 +230,7 @@
 > 운영 테이블(V7 `idempotency_key`)과 JDBC 저장소(`JdbcIdempotencyKeyRepository`)
 > ([TASK-002I-B](experiments/TASK-002I-B-idempotency-store.md)), 그리고 TX0/TX1/TX2 조정자 `IdempotentHoldService` 와
 > 그 빈 배선([TASK-002I-C](experiments/TASK-002I-C-idempotent-hold-service.md))이 있다.
-> **REST·`Idempotency-Key` 헤더·인증이 없으므로 I-18 은 HTTP 요청 경로에서 아직 강제되지 않는다.** 아래 메커니즘은
+> **REST·`Idempotency-Key` 헤더가 없으므로 I-18 은 HTTP 요청 경로에서 아직 강제되지 않는다.** (액세스 토큰 검증은 Task 2J-B 에서 생겼으나 선점 컨트롤러가 없다.) 아래 메커니즘은
 > 조정자가 불려졌을 때의 보장이다. 사용자 id 는 아직 명령에서 오며 인증된 주체와 대조하지 않는다.
 
 - **보장 메커니즘** — 4단계.
@@ -247,8 +251,10 @@
   - `IN_PROGRESS` 에 리스가 없으면 크래시 후 영구히 진행 중
 - **검증 방법** — `T-4`: 선점 성공 후 응답 유실 및 동일 키 재요청 → 두 응답이 바이트 단위로 동일, 좌석 상태 변경 1회. 동일 키 100회 동시 요청 → **500 이 단 1건도 없을 것.**
 
-> **검토 중 (Task 2J-A)** — 오류 본문의 요청별 `traceId`(규칙 24)와 "바이트 단위로 동일" 이 함께 성립하지 않는다.
-> 해결안과 권장안은 [HOLD_HTTP_CONTRACT.md](HOLD_HTTP_CONTRACT.md) §7.3, 결정 항목 D1 이다. **이 검증 기준은 결정 전까지 바꾸지 않았다.**
+> **"두 응답" 의 범위 (D1 채택, 2026-10-30)** — 바이트 동일을 요구하는 것은 **상태 코드·본문 바이트·`Location`·`Content-Type`** 이다.
+> 요청별 관측 정보인 `X-Trace-Id` 헤더는 요청마다 다르고, 재생 대상 업무 실패 본문에는 traceId 를 넣지 않는다 (규칙 24 의 예외).
+> 결정적 생성이므로 **배포 사이에 문구·상태·직렬화가 바뀌면 깨진다** — 재생 가능한 키가 남아 있는 동안 호환을 유지한다
+> ([HOLD_HTTP_CONTRACT.md](HOLD_HTTP_CONTRACT.md) §7.3).
 
 ### I-19. Kafka 메시지가 중복 전달되어도 중복 예약·중복 결제가 발생하지 않는다
 
