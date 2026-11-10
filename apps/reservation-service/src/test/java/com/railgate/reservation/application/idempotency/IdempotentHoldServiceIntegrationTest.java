@@ -602,4 +602,167 @@ class IdempotentHoldServiceIntegrationTest extends MySqlSpringTestSupport {
             return single;
         }
     }
+
+    // ------------------------------------------------------------------ §7 TX0 데드락 (PR #32 CI)
+
+    @Nested
+    @DisplayName("§7 ★ TX0 INSERT 데드락(1213) — 새 TX0 에서 제한적 재시도 (PR #32 CI 실패)")
+    class TX0_데드락 {
+
+        /**
+         * ★ 결정적 재현. 같은 키 행을 지우는 트랜잭션이 열려 있는 동안 같은 키 INSERT 두 개가 기다리게 한 뒤 커밋한다.
+         * 두 INSERT 는 삭제 표시된 행에 S 잠금을 함께 얻고 서로의 S 때문에 X 를 얻지 못해 하나가 1213 으로 롤백된다
+         * (SHOW ENGINE INNODB STATUS 로 관측 — TASK-002J-B §7). 보완 전에는 그 하나가 CannotAcquireLockException 으로 나갔다.
+         */
+        @Test
+        void 지우는_트랜잭션_뒤에서_깨어난_두_요청도_예외_없이_한_번만_실행된다() throws Exception {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            long b = insertAvailableSeat(SCHEDULE, "1B");
+            service.hold(KEY, command(USER_A, a));
+            releaseHold.release(new ReleaseHoldCommand(seatHold(a), USER_A)); // 좌석을 다시 비운다
+            IdempotentHoldService counted = hooked(() -> { }, () -> { });
+
+            try (java.sql.Connection deleter = dataSource().getConnection()) {
+                deleter.setAutoCommit(false);
+                try (java.sql.Statement st = deleter.createStatement()) {
+                    st.executeUpdate("DELETE FROM idempotency_key WHERE user_id = " + USER_A.value()
+                            + " AND operation = 'HOLD_SEATS' AND idempotency_key = '" + KEY.value() + "'");
+                }
+                Future<IdempotentHoldResult> first = pool.submit(() -> counted.hold(KEY, command(USER_A, a, b)));
+                Future<IdempotentHoldResult> second = pool.submit(() -> counted.hold(KEY, command(USER_A, b, a)));
+                awaitLockWaits(2);
+                deleter.commit();
+
+                List<IdempotentHoldResult> results = List.of(get(first), get(second)); // 예외면 여기서 실패
+                assertThat(results).filteredOn(IdempotentHoldResult.Executed.class::isInstance).hasSize(1);
+                assertThat(results).filteredOn(r -> !(r instanceof IdempotentHoldResult.Executed))
+                        .allSatisfy(r -> assertThat(r).isInstanceOfAny(
+                                IdempotentHoldResult.InProgress.class, IdempotentHoldResult.Replayed.class));
+            }
+            assertThat(attempts).as("선점 실행 1회").hasValue(1);
+            assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value())).isEqualTo(2);
+            assertThat(statusOf(a)).isEqualTo("HELD");
+            HoldId held = seatHold(a);
+            assertThat(holdIdOf(service.hold(KEY, command(USER_A, a, b)))).as("재생").isEqualTo(held);
+        }
+
+        /** 풀 크기 1 — 데드락으로 롤백된 TX0 의 커넥션을 돌려준 뒤 재시도하므로 커넥션이 겹치지 않는다. */
+        @Test
+        void 커넥션_하나로도_데드락_재시도가_끝난다() {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            HikariDataSource single = singleConnection();
+            try {
+                DataSourceTransactionManager tm = new DataSourceTransactionManager(single);
+                HoldSeatsService unproxied = new HoldSeatsService(
+                        new JdbcSaleEventScopeRepository(single),
+                        new JdbcUserHoldQuotaRepository(single),
+                        new JdbcMultiSeatHoldRepository(single, tm, Duration.ofMinutes(5)));
+                JdbcIdempotencyKeyRepository real = new JdbcIdempotencyKeyRepository(single);
+                AtomicInteger inserts = new AtomicInteger();
+                IdempotencyKeyPort deadlockOnce = new DeadlockingFirstInsertPort(real, inserts);
+                IdempotentHoldService singleService =
+                        new IdempotentHoldService(deadlockOnce, unproxied, tm, LEASE, new SimpleMeterRegistry());
+
+                IdempotentHoldResult result = singleService.hold(KEY, command(USER_A, a));
+
+                assertThat(result).isInstanceOf(IdempotentHoldResult.Executed.class);
+                assertThat(inserts).as("첫 INSERT 는 데드락으로 롤백, 두 번째가 성공").hasValue(2);
+                assertThat(keyRow(USER_A, KEY)).containsEntry("state", "COMPLETED").containsEntry("fence", 1L);
+                assertThat(statusOf(a)).isEqualTo("HELD");
+            } finally {
+                single.close();
+            }
+        }
+
+        private HikariDataSource singleConnection() {
+            HikariDataSource app = (HikariDataSource) dataSource();
+            HikariDataSource single = new HikariDataSource();
+            single.setJdbcUrl(app.getJdbcUrl());
+            single.setUsername(app.getUsername());
+            single.setPassword(app.getPassword());
+            single.setConnectionInitSql("SET SESSION innodb_lock_wait_timeout = 3");
+            single.setMaximumPoolSize(1);
+            single.setConnectionTimeout(2_000);
+            return single;
+        }
+    }
+
+    /**
+     * 첫 INSERT 를 실제로 실행한 뒤(커넥션·트랜잭션을 쓴 상태에서) MySQL 데드락 예외를 던지는 대역. 호출자 트랜잭션은
+     * 롤백되므로 행은 남지 않는다 — InnoDB 가 데드락 희생 트랜잭션을 롤백하는 것과 같은 결과다.
+     */
+    private static final class DeadlockingFirstInsertPort implements IdempotencyKeyPort {
+        private final IdempotencyKeyPort delegate;
+        private final AtomicInteger inserts;
+
+        DeadlockingFirstInsertPort(IdempotencyKeyPort delegate, AtomicInteger inserts) {
+            this.delegate = delegate;
+            this.inserts = inserts;
+        }
+
+        @Override
+        public java.util.Optional<com.railgate.reservation.idempotency.KeyOwnership> tryInsert(
+                com.railgate.reservation.idempotency.IdempotencyScope scope,
+                com.railgate.reservation.idempotency.RequestFingerprint fingerprint, Duration lease) {
+            var owned = delegate.tryInsert(scope, fingerprint, lease);
+            if (inserts.incrementAndGet() == 1) {
+                throw new CannotAcquireLockException("주입된 데드락",
+                        new java.sql.SQLException("Deadlock found when trying to get lock", "40001", 1213));
+            }
+            return owned;
+        }
+
+        @Override
+        public java.util.Optional<com.railgate.reservation.idempotency.IdempotencyRecord> find(
+                com.railgate.reservation.idempotency.IdempotencyScope scope) {
+            return delegate.find(scope);
+        }
+
+        @Override
+        public java.util.Optional<com.railgate.reservation.idempotency.KeyOwnership> takeOver(
+                com.railgate.reservation.idempotency.IdempotencyScope scope,
+                com.railgate.reservation.idempotency.KeyOwnership seen, Duration lease) {
+            return delegate.takeOver(scope, seen, lease);
+        }
+
+        @Override
+        public com.railgate.reservation.idempotency.KeyWriteOutcome completeSucceeded(
+                com.railgate.reservation.idempotency.IdempotencyScope scope,
+                com.railgate.reservation.idempotency.KeyOwnership mine, Succeeded outcome) {
+            return delegate.completeSucceeded(scope, mine, outcome);
+        }
+
+        @Override
+        public com.railgate.reservation.idempotency.KeyWriteOutcome completeRejected(
+                com.railgate.reservation.idempotency.IdempotencyScope scope,
+                com.railgate.reservation.idempotency.KeyOwnership mine, Rejected outcome) {
+            return delegate.completeRejected(scope, mine, outcome);
+        }
+
+        @Override
+        public com.railgate.reservation.idempotency.KeyWriteOutcome abandon(
+                com.railgate.reservation.idempotency.IdempotencyScope scope,
+                com.railgate.reservation.idempotency.KeyOwnership mine) {
+            return delegate.abandon(scope, mine);
+        }
+    }
+
+    /** 다른 세션이 InnoDB 잠금을 기다리기 시작했는지 관측한다 (시간을 재지 않는다). root 로 읽는다. */
+    private void awaitLockWaits(int count) throws Exception {
+        HikariDataSource app = (HikariDataSource) dataSource();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(AWAIT);
+        try (java.sql.Connection root = java.sql.DriverManager.getConnection(app.getJdbcUrl(), "root", app.getPassword());
+             java.sql.Statement st = root.createStatement()) {
+            while (System.nanoTime() < deadline) {
+                try (java.sql.ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM performance_schema.data_lock_waits")) {
+                    rs.next();
+                    if (rs.getLong(1) >= count) {
+                        return;
+                    }
+                }
+                Thread.onSpinWait();
+            }
+        }
+        throw new IllegalStateException("잠금 대기가 관측되지 않았다");
+    }
 }

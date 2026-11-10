@@ -147,6 +147,8 @@ Content-Type: application/json
   `PessimisticLockingFailureException`·`CannotGetJdbcConnectionException` → 503, 나머지 → 500). 둘 다 조정자가 결과를 저장하지
   않았고 리스 포기를 시도했으므로 같은 키 재시도가 다시 실행될 수 있다.
 - 커밋 결과 불명은 500 이다. 실제로 커밋됐다면 같은 키 재시도가 저장된 성공을 재생한다.
+- 조정자는 TX0(키 확보)의 MySQL 데드락(1213)만 내부에서 호출당 3회까지 다시 시도한다 (PR #32). 그래도 데드락이면 그 예외가
+  전파되며 503 대상이다 — 결과도 키도 남지 않았으므로 같은 키 재시도가 안전하다.
 
 ### 6.2 로그·오류율 분류 [확정]
 

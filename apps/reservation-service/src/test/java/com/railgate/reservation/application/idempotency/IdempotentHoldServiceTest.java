@@ -515,11 +515,126 @@ class IdempotentHoldServiceTest {
             Set<String> tagKeys = meters.getMeters().stream()
                     .map(Meter::getId).flatMap(id -> id.getTags().stream()).map(Tag::getKey)
                     .collect(Collectors.toSet());
-            assertThat(tagKeys).isSubsetOf("result", "outcome", "write");
+            assertThat(tagKeys).isSubsetOf("result", "outcome", "write", "statement");
             String allTagValues = meters.getMeters().stream()
                     .flatMap(m -> m.getId().getTags().stream()).map(Tag::getValue)
                     .collect(Collectors.joining(","));
             assertThat(allTagValues).doesNotContain(KEY.value(), HELD.holdId().asString(), "7");
+        }
+    }
+
+    // ------------------------------------------------------------------ TX0 데드락
+
+    private static CannotAcquireLockException mysqlDeadlock() {
+        return new CannotAcquireLockException("주입된 데드락",
+                new java.sql.SQLException("Deadlock found when trying to get lock", "40001", 1213));
+    }
+
+    private static CannotAcquireLockException mysqlLockWaitTimeout() {
+        return new CannotAcquireLockException("주입된 잠금 대기 초과",
+                new java.sql.SQLException("Lock wait timeout exceeded", "HY000", 1205));
+    }
+
+    @Nested
+    @DisplayName("§9 ★ TX0 데드락(1213)만 새 트랜잭션에서 제한적으로 재시도")
+    class TX0_데드락 {
+
+        @Test
+        void INSERT_데드락_뒤_새_TX0_에서_재시도해_실행한다() {
+            keys.failFirst("tryInsert", 1, IdempotentHoldServiceTest::mysqlDeadlock);
+
+            assertThat(service().hold(KEY, command(1, 2))).isInstanceOf(IdempotentHoldResult.Executed.class);
+            assertThat(keys.calls()).containsExactly("tryInsert@1", "tryInsert@2", "completeSucceeded@3");
+            assertThat(tx.ends()).as("실패한 TX0 는 롤백으로 끝나고 재시도는 새 트랜잭션이다")
+                    .containsExactly("1:rollback", "2:commit", "3:commit");
+            assertThat(count("railgate.idempotency.hold.tx0_deadlocks", "statement", "insert", "outcome", "retried"))
+                    .isEqualTo(1);
+            assertThat(holdCalls).hasValue(1);
+        }
+
+        @Test
+        void 인수_데드락도_새_TX0_에서_재시도한다() {
+            KeyOwnership old = KeyOwnership.newGeneration();
+            putInProgress(old, true);
+            keys.failFirst("takeOver", 1, IdempotentHoldServiceTest::mysqlDeadlock);
+
+            assertThat(service().hold(KEY, command(1, 2))).isInstanceOf(IdempotentHoldResult.Executed.class);
+            assertThat(keys.row(SCOPE).ownership).isEqualTo(old.next());
+            assertThat(count("railgate.idempotency.hold.tx0_deadlocks", "statement", "takeover", "outcome", "retried"))
+                    .isEqualTo(1);
+        }
+
+        /** 재시도 예산(호출당 3회)을 다 쓰면 마지막 데드락을 그대로 던지고 앞의 것을 함께 남긴다. 삼키지 않는다. */
+        @Test
+        void 재시도를_소진하면_원래_데드락을_전파하고_실행하지_않는다() {
+            List<CannotAcquireLockException> thrown = new ArrayList<>();
+            keys.failOn("tryInsert", () -> {
+                CannotAcquireLockException e = mysqlDeadlock();
+                thrown.add(e);
+                return e;
+            });
+
+            assertThatThrownBy(() -> service().hold(KEY, command(1, 2)))
+                    .satisfies(t -> {
+                        assertThat(t).isSameAs(thrown.getLast());
+                        assertThat(t.getSuppressed()).containsExactlyElementsOf(thrown.subList(0, thrown.size() - 1));
+                    });
+            assertThat(thrown).as("최초 1회 + 재시도 3회").hasSize(1 + IdempotentHoldService.TX0_DEADLOCK_RETRY_BUDGET);
+            assertThat(holdCalls).hasValue(0);
+            assertThat(keys.calls()).noneMatch(c -> c.startsWith("abandon"));
+            assertThat(count("railgate.idempotency.hold.tx0_deadlocks", "statement", "insert", "outcome", "exhausted"))
+                    .isEqualTo(1);
+            assertThat(count("railgate.idempotency.hold.calls", "result", "failed")).isEqualTo(1);
+        }
+
+        @Test
+        void 잠금_대기_초과는_재시도하지_않고_바로_전파한다() {
+            CannotAcquireLockException timeout = mysqlLockWaitTimeout();
+            keys.failOn("tryInsert", () -> timeout);
+
+            assertThatThrownBy(() -> service().hold(KEY, command(1, 2))).isSameAs(timeout);
+            assertThat(keys.calls()).containsExactly("tryInsert@1");
+        }
+
+        /** 상위 타입만으로는 재시도하지 않는다 — MySQL 1213 이 원인에 확인돼야 한다. */
+        @Test
+        void vendor_code_없는_CannotAcquireLockException_은_재시도하지_않는다() {
+            CannotAcquireLockException bare = new CannotAcquireLockException("원인 없음");
+            keys.failOn("tryInsert", () -> bare);
+
+            assertThatThrownBy(() -> service().hold(KEY, command(1, 2))).isSameAs(bare);
+            assertThat(keys.calls()).containsExactly("tryInsert@1");
+        }
+
+        @Test
+        void 데드락_재시도_중_다른_장애가_나면_그것을_전파하고_데드락을_함께_남긴다() {
+            CannotAcquireLockException deadlock = mysqlDeadlock();
+            DataRetrievalFailureException other = new DataRetrievalFailureException("연결 끊김");
+            int[] call = {0};
+            keys.failOn("tryInsert", () -> call[0]++ == 0 ? deadlock : other);
+
+            assertThatThrownBy(() -> service().hold(KEY, command(1, 2)))
+                    .isSameAs(other)
+                    .satisfies(t -> assertThat(t.getSuppressed()).containsExactly(deadlock));
+        }
+
+        /** TX1 의 데드락은 TX0 재시도 대상이 아니다 — 결과를 저장하지 않고 리스를 포기한 뒤 전파한다(기존 계약). */
+        @Test
+        void TX1_데드락은_재실행하지_않는다() {
+            CannotAcquireLockException deadlock = mysqlDeadlock();
+            holdBehavior = command -> {
+                throw deadlock;
+            };
+
+            assertThatThrownBy(() -> service().hold(KEY, command(1, 2))).isSameAs(deadlock);
+            assertThat(holdCalls).hasValue(1);
+            assertThat(keys.calls()).containsExactly("tryInsert@1", "abandon:1@3");
+            assertThat(keys.row(SCOPE).outcome).as("업무 실패로 저장하지 않는다").isNull();
+        }
+
+        @Test
+        void 데드락은_업무_실패로_분류되지_않는다() {
+            assertThat(HoldRejectionClassifier.classify(mysqlDeadlock())).isEmpty();
         }
     }
 

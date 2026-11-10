@@ -52,6 +52,12 @@ final class FakeIdempotencyKeyPort implements IdempotencyKeyPort {
         failures.put(method, failure);
     }
 
+    /** 처음 {@code times} 번만 실패한다. 그 뒤로는 정상 동작한다 (데드락 재시도 검증용). */
+    void failFirst(String method, int times, Supplier<RuntimeException> failure) {
+        int[] remaining = {times};
+        failures.put(method, () -> remaining[0]-- > 0 ? failure.get() : null);
+    }
+
     synchronized Row row(IdempotencyScope scope) {
         return rows.get(scope);
     }
@@ -171,8 +177,9 @@ final class FakeIdempotencyKeyPort implements IdempotencyKeyPort {
         if (!"find".equals(name) && "-".equals(where)) {
             throw new IllegalStateException(name + " 는 트랜잭션 안에서만 부를 수 있다");
         }
-        if (failure != null) {
-            throw failure.get();
+        RuntimeException thrown = failure == null ? null : failure.get();
+        if (thrown != null) {
+            throw thrown;
         }
     }
 }

@@ -175,3 +175,118 @@ Docker VM 이 1.928 GiB 인데 다른 프로젝트 컨테이너 5개가 약 404 
 - HS256 대칭키라 검증자도 서명할 수 있다 (ADR-015 §7).
 - 오류 디스패치(`DispatcherType.ERROR`)는 허용했다 — 원래 요청에서 이미 인증 판정을 마친 뒤의 오류 페이지 렌더링이다. 오류 디스패치
   시점에는 MDC 의 traceId 가 이미 지워져 있을 수 있다(요청 속성·응답 헤더에는 남는다).
+
+---
+
+## 7. PR #32 CI 실패 보완 — TX0 멱등키 확보 데드락 (2026-11-10)
+
+§5 의 1,172개는 보완 전 로컬 실행 기록이며 그대로 둔다. 아래는 이번 보완의 기록이다.
+
+### 실패 (CI)
+
+- 커밋 `7ecb0ae`, CI 실행 [42632831008](https://github.com/whdkfhr/rail-gate/actions/runs/42632831008) — `apps:reservation-service` 348개 중 **1개 실패**
+- `IdempotentHoldServiceIntegrationTest` §4 "실행은_한_번이고_나머지는_진행_중_또는_재생이며_예외가_없다" — 같은 키 16개 동시 요청 중 하나의
+  **TX0 `INSERT INTO idempotency_key`** 가 `MySQLTransactionRollbackException: Deadlock found` → `CannotAcquireLockException` 으로 전파
+- OOM·연결 장애가 아니다 (로그에 `Communications link failure` 없음). 같은 커밋이 로컬 전체 실행(§5)에서는 통과했다
+- 실패 테스트는 Task 2I-C 의 기존 테스트이고 스택에 인증 코드가 없다. 새 인증 코드가 원인이라는 근거는 찾지 못했다
+
+### 재현과 관측 (로컬, MySQL 8.4 Testcontainers)
+
+| 실험 | 결과 | 구분 |
+|---|---|---|
+| CI 와 같은 순서 — 같은 키로 선점 완료 → 키 행 삭제(커밋) → 같은 키 16개 동시 `hold` — **보완 전 코드**, 40회 | **1회** 데드락 예외(`SQL1213`) | 관측 |
+| 같은 실험, 재시도를 끈 상태(예산 0), 200회 | **8회** 라운드 실패, 데드락 예외 53건 | 관측 |
+| 같은 키 행을 **지우는 열린 트랜잭션** 뒤에서 운영 저장소 INSERT 2개가 기다린 뒤 커밋 | **매번** 하나 `OWNED`·하나 `SQL1213` (테스트로 고정) | 관측 |
+| 대조 — 같은 행을 지우지 않고 `FOR UPDATE` 로만 잡음 | 둘 다 `DUPLICATE`, 데드락 없음 | 관측 |
+| 삭제 커밋 후 읽기 뷰로 purge 를 막고 저장소 INSERT 16개 동시, 30회 / 지운 적 없는 키 30회 | 0회 / 0회 | 관측 (재현 안 됨) |
+
+`SHOW ENGINE INNODB STATUS` 의 `LATEST DETECTED DEADLOCK` (지우는 트랜잭션 시나리오와 CI 순서 시나리오 모두 같은 모양):
+
+```text
+*** (1) TRANSACTION: ... inserting  INSERT INTO idempotency_key
+*** (1) HOLDS THE LOCK(S):  index PRIMARY ... lock mode S locks rec but not gap
+*** (1) WAITING FOR THIS LOCK TO BE GRANTED:  index PRIMARY ... lock_mode X locks rec but not gap waiting
+*** (2) TRANSACTION: ... inserting  INSERT INTO idempotency_key
+*** (2) HOLDS THE LOCK(S):  index PRIMARY ... lock mode S locks rec but not gap
+*** (2) WAITING FOR THIS LOCK TO BE GRANTED:  index PRIMARY ... lock_mode X locks rec but not gap waiting
+*** WE ROLL BACK TRANSACTION (2)
+```
+
+**확인한 사실** — 두 INSERT 가 PRIMARY 의 같은 레코드에 S(레코드만) 잠금을 각각 쥔 채 X 를 기다려 하나가 롤백된다.
+같은 키 행을 지우는 트랜잭션 뒤에서는 결정적으로 일어나고, 지우지 않으면 일어나지 않는다.
+
+**추정** — 그 레코드는 같은 키의 **삭제 표시(delete-marked)된 이전 행**이다. CI 의 §4 는 앞선 테스트들이 같은 키(`svc-key-0001`)를 쓰고
+`@BeforeEach` 가 `DELETE FROM idempotency_key` 를 하므로, purge 전에 16개 INSERT 가 같은 삭제 표시 행에 몰렸을 것으로 본다.
+purge 시점에 달려 있어 로컬에서 드물게만 재현된다. InnoDB 출력에서 레코드 내용까지 확인하지는 않았다.
+**운영에서도 같은 모양이 생긴다** — 보존 기간 정리가 행을 지우는 동안 같은 키가 다시 쓰이면 된다.
+
+### 대안 비교
+
+| 대안 | 지우는 트랜잭션 시나리오 | 판정 |
+|---|---|---|
+| 현행 INSERT (REPEATABLE READ) | 데드락 (결정적) | — |
+| READ COMMITTED | **여전히 데드락** — 간격 잠금이 아니라 레코드 S·X 충돌이다 | 기각 |
+| `INSERT ... ON DUPLICATE KEY UPDATE` | 데드락 없음 (중복 검사에 X 잠금) | 기각 — 저장소의 "이미 있으면 빈 값" 판정을 영향 행 수로 바꿔야 하고 그 수가 드라이버 설정(`useAffectedRows`)에 따라 다르다. Task 2I-B 저장소 계약 변경이다. 재시도가 자주 소진되면 다시 검토 |
+| **MySQL 1213 한정 제한적 재시도** | 희생 TX0 는 아무것도 남기지 않으므로 새 TX0 에서 다시 하면 된다 | **선택** |
+
+### 보완 — `IdempotentHoldService`
+
+- **대상** — 원인 사슬에 vendor code **1213** 인 `SQLException` 이 있을 때만. `CannotAcquireLockException` 이라는 상위 타입만으로 재시도하지 않는다.
+  잠금 대기 초과(1205)·연결 장애는 근거가 없어 확대하지 않았다
+- **범위** — TX0 의 INSERT 와 인수 UPDATE. 조회는 잠그지 않는 일관 읽기라 감싸지 않았다(나면 그대로 전파). TX1·TX2·리스 포기는
+  재시도하지 않는다 — 본 작업 재실행이나 커밋 결과 불명 처리는 그대로다
+- **방식** — `TransactionTemplate` 이 롤백과 커넥션 반환을 마친 뒤 예외를 다시 던지므로, 그 다음 **새 REQUIRES_NEW 트랜잭션**에서 같은 문장을 다시 한다.
+  대기하지 않는다 — 이긴 쪽 TX0 는 한 문장이라 곧 커밋되고, 재시도는 DB 잠금 대기로 그 커밋을 기다린다
+- **상한** — 호출 하나당 재시도 **3회**(INSERT·인수가 나눠 쓴다). 라운드 3회와 합쳐도 TX0 실행 수는 유한하다
+- **소진** — 마지막 데드락 예외를 그대로 던지고 앞의 것을 suppressed 로 남긴다. 중복·진행 중·업무 실패로 바꾸지 않는다
+- **관측** — `railgate.idempotency.hold.tx0_deadlocks{statement=insert|takeover, outcome=retried|exhausted}` — 고정 태그만
+- 소유권(generation + fence), 성공 기록과 선점의 원자성, quota → seat → key 잠금 순서, 순차 커넥션 사용은 바뀌지 않았다
+
+### RED → GREEN
+
+| 단계 | 결과 |
+|---|---|
+| RED (보완 전, 상수만 추가) | 새 테스트 10개 중 **6개 실패** — 단위 4(INSERT·인수 재시도, 소진, 재시도 중 다른 장애), MySQL 2(지우는 트랜잭션 뒤 두 요청 → 실제 `CannotAcquireLockException`(1213), 풀 크기 1 재시도). 통과 4개는 비대상 즉시 전파·TX1 미재실행·분류처럼 보완 전에도 맞던 계약 |
+| GREEN | 새 테스트 **14개** 포함 전부 통과 |
+
+새 테스트:
+
+- `IdempotentHoldServiceTest` §9 (8) — INSERT 데드락 뒤 새 TX0 재시도(롤백 → 새 트랜잭션 확인), 인수 데드락 재시도, 소진 시 원래 예외·suppressed·실행 0·포기 0,
+  1205 즉시 전파, vendor code 없는 `CannotAcquireLockException` 즉시 전파, 재시도 중 다른 장애 전파, TX1 데드락 미재실행, 데드락의 업무 실패 오분류 없음
+- `IdempotentHoldServiceIntegrationTest` §7 (2) — **지우는 트랜잭션 뒤에서 깨어난 두 요청**이 예외 없이 실행 1회·quota 2·재생, **풀 크기 1** 에서 데드락 재시도 완료
+- `IdempotencyKeyInsertDeadlockReproductionTest` (4) — 저장소 INSERT 데드락 결정적 재현, 행 유지 시 중복 대조군, READ COMMITTED 데드락, ON DUPLICATE KEY UPDATE 무데드락
+
+기존 §4 16스레드 동시 테스트는 어서션·스레드 수를 바꾸지 않았다. 과거 세대 소유권 거절(§5)·선점 원자성 테스트도 그대로 통과한다.
+
+### 반복 검증 (통계적 관측 — 증명이 아니다)
+
+CI 와 같은 순서(같은 키로 선점 완료 → 키 행 삭제 → 같은 키 16개 동시 `hold`)를 같은 컨텍스트에서 반복했다. 탐색용 실행이며 영구 테스트로
+남기지 않았다(소진 확률이 0 이 아니라 결정적 단언이 될 수 없다).
+
+| 조건 | 라운드 | 실패 라운드 | TX0 데드락 재시도 | 소진 |
+|---|---:|---:|---:|---:|
+| 보완 전 코드 | 40 | 1 | — | — |
+| 재시도 끔 (예산 0) | 200 | 8 | 0 | 53 |
+| **보완 (예산 3)** | 200 | **0** | 27 | **0** |
+
+재시도 수 27 은 재시도 자체가 다시 데드락을 만난 경우를 포함한다. 같은 Spring 컨텍스트의 메트릭 누적값이다.
+
+### 전체 검증
+
+2026-11-10, 이전 XML 을 지운 뒤 `./gradlew check --rerun-tasks --max-workers=1` — `BUILD SUCCESSFUL`, 21 tasks executed. `git diff --check` 통과.
+
+| 모듈 | tests | failures | errors | skipped |
+|---|---:|---:|---:|---:|
+| `apps:queue-service` | 1 | 0 | 0 | 0 |
+| `apps:reservation-service` | 362 | 0 | 0 | 0 |
+| `modules:reservation-domain` | 202 | 0 | 0 | 0 |
+| `modules:reservation-infra` | 621 | 0 | 0 | 0 |
+| **합계** | **1,186** | **0** | **0** | **0** |
+
++14 는 위 새 테스트다. 이번 실행에서 OOM·연결 장애는 없었다. 다른 프로젝트 컨테이너는 이전 작업에서 이미 중지된 상태였고 이번에 바꾸지 않았다.
+
+### 남은 위험
+
+- 재시도 예산 3 은 측정으로 정한 값이 아니다. 같은 키에 더 많은 요청이 몰리면 소진될 수 있고, 그때는 데드락 예외가 503 대상 장애로 나간다
+- 데드락 레코드가 삭제 표시 행이라는 것은 강한 정황(결정적 재현·같은 잠금 모양)에 기댄 추정이다
+- 실제 CI 환경에서의 재발 여부는 이 PR 의 CI 실행 결과로만 확인한다 — 한 번 통과는 반증에 실패한 것일 뿐이다
