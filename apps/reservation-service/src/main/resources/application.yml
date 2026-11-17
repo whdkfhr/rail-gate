@@ -14,6 +14,12 @@ spring:
       # MySQL max_connections 기본값 151 을 넘기지 않도록 제한한다.
       maximum-pool-size: 64
 
+  servlet:
+    multipart:
+      # Task 2J-D (PR #37 리뷰). 이 서비스에는 multipart 를 받는 기능이 없다. 켜 두면 MVC 가 컨트롤러에 닿기 전에
+      # multipart 본문을 파싱해, 선점 API 가 계약대로 415 를 내기 전에 크기 초과(413) 같은 다른 응답이 나가고 본문 전체를 읽는다.
+      enabled: false
+
   flyway:
     # 마이그레이션은 reservation-infra 의 classpath:db/migration 에 있다.
     # 앱은 위치를 재정의하지 않고 그 모듈의 것을 그대로 쓴다 — 두 벌이 되면 어긋난다.

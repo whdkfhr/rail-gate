@@ -477,7 +477,10 @@ class HoldControllerIntegrationTest extends SecuredWebTestSupport {
             assertUntouched(before, a);
         }
 
-        /** V3 — 없는 좌석·회차 혼합은 사전 조회에서 422 이고 키 행이 없다. 본문은 저장된 422 와 같은 형식이다. */
+        /**
+         * V3 — 없는 좌석·회차 혼합은 사전 조회에서 422 이고 키 행이 없다. 저장되지 않는 <b>현재 요청 거절</b>이므로 본문에 현재 traceId 를
+         * 담는다 (PR #37 리뷰 — 저장된 422 의 {code, message} 와 다르다).
+         */
         @Test
         void 없는_좌석과_회차_혼합은_422_이고_키를_소비하지_않는다() throws Exception {
             long a = insertAvailableSeat(SCHEDULE, "1A");
@@ -485,14 +488,16 @@ class HoldControllerIntegrationTest extends SecuredWebTestSupport {
             int before = coordinatorCalls();
 
             for (HttpResponse<byte[]> response : List.of(req().seats(a, 987_654_321L).send(), req().seats(a, other).send())) {
-                assertThat(response.statusCode()).isEqualTo(422);
-                assertThat(text(response)).isEqualTo("{\"code\":\"SALE_EVENT_SCOPE_REJECTED\",\"message\":\""
-                        + HoldErrorCode.SALE_EVENT_SCOPE_REJECTED.message + "\"}");
-                traceId(response);
+                assertError(response, 422, "SALE_EVENT_SCOPE_REJECTED");
+                assertThat(text(response)).isEqualTo("{\"code\":\"SALE_EVENT_SCOPE_REJECTED\",\"message\":"
+                        + "\"선택한 좌석의 판매 회차를 하나로 확인할 수 없습니다.\",\"traceId\":\"" + traceId(response) + "\"}");
+                assertThat(response.headers().firstValue("Location")).isEmpty();
             }
             assertThat(coordinatorCalls()).isEqualTo(before);
             assertThat(keyRows()).isZero();
+            assertThat(statusOf(a)).isEqualTo("AVAILABLE");
             assertThat(statusOf(other)).isEqualTo("AVAILABLE");
+            assertThat(quotaRowCount()).isZero();
         }
 
         /** V4 — 오류 본문에 입력값·키·사용자 id 가 없다. */
@@ -506,6 +511,94 @@ class HoldControllerIntegrationTest extends SecuredWebTestSupport {
 
             assertThat(text(response)).doesNotContain("secret-value").doesNotContain(key)
                     .doesNotContain(Long.toString(USER)).doesNotContain("Exception");
+        }
+    }
+
+    // ------------------------------------------------------------------ §4-1 multipart
+
+    @Nested
+    @DisplayName("§4-1 ★ multipart 본문은 컨트롤러 전에 파싱하지 않는다 (PR #37 리뷰)")
+    class Multipart {
+
+        private static final String BOUNDARY = "railgate-boundary";
+        private static final String MULTIPART = "multipart/form-data; boundary=" + BOUNDARY;
+        /** 형식이 맞는 multipart 본문. */
+        private static final String WELL_FORMED = "--" + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"seatIds\"\r\n\r\n1\r\n--"
+                + BOUNDARY + "--\r\n";
+        /** 경계 선언과 맞지 않는 깨진 multipart 본문 — 파싱을 시도하면 실패한다. */
+        private static final String MALFORMED = "--other-boundary\r\ngarbage-without-headers";
+
+        private Req multipart(String body) {
+            Req request = req();
+            request.contentType = MULTIPART;
+            request.body = body;
+            return request;
+        }
+
+        @Test
+        void 인증이_없으면_401_이_먼저다() throws Exception {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            int before = coordinatorCalls();
+            for (String body : List.of(WELL_FORMED, MALFORMED)) {
+                Req request = multipart(body);
+                request.access = null;
+                HttpResponse<byte[]> response = request.send();
+                assertThat(response.statusCode()).isEqualTo(401);
+                assertThat(json(response)).containsEntry("code", "AUTHENTICATION_REQUIRED");
+            }
+            assertUntouched(before, a);
+        }
+
+        @Test
+        void 인증_후_키가_없으면_400_IDEMPOTENCY_KEY_INVALID() throws Exception {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            int before = coordinatorCalls();
+            for (String body : List.of(WELL_FORMED, MALFORMED)) {
+                Req request = multipart(body);
+                request.keys = List.of();
+                assertError(request.send(), 400, "IDEMPOTENCY_KEY_INVALID");
+            }
+            assertUntouched(before, a);
+        }
+
+        @Test
+        void 두_토큰과_키가_유효한_multipart_는_415_UNSUPPORTED_MEDIA_TYPE() throws Exception {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            int before = coordinatorCalls();
+            for (String body : List.of(WELL_FORMED, MALFORMED)) {
+                HttpResponse<byte[]> response = multipart(body).send();
+                assertError(response, 415, "UNSUPPORTED_MEDIA_TYPE");
+                assertThat(text(response)).isEqualTo("{\"code\":\"UNSUPPORTED_MEDIA_TYPE\",\"message\":"
+                        + "\"요청 본문은 application/json 이어야 합니다.\",\"traceId\":\"" + traceId(response) + "\"}");
+            }
+            assertUntouched(before, a);
+        }
+
+        /**
+         * ★ 컨트롤러 전에 multipart 를 파싱하면 기본 파일 크기 상한(1MB)을 넘는 파트가 MVC 의 multipart 처리에서 먼저 실패해
+         * 계약 밖의 응답이 나간다. 파싱하지 않으면 컨트롤러가 415 로 거절한다 — 본문은 상한(4,096 바이트)만큼만 읽는다.
+         */
+        @Test
+        void 큰_파트의_multipart_도_컨트롤러가_415_로_거절한다() throws Exception {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            int before = coordinatorCalls();
+            String big = "--" + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.bin\"\r\n"
+                    + "Content-Type: application/octet-stream\r\n\r\n" + "x".repeat(2 * 1024 * 1024) + "\r\n--" + BOUNDARY + "--\r\n";
+
+            assertError(multipart(big).send(), 415, "UNSUPPORTED_MEDIA_TYPE");
+            assertUntouched(before, a);
+        }
+
+        /** 정상 JSON 선점과 본문 크기 상한은 그대로다. */
+        @Test
+        void 정상_JSON_과_본문_상한은_그대로다() throws Exception {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            Req oversized = req();
+            oversized.body = "{\"seatIds\":[" + a + "]}" + " ".repeat(HoldRequestParser.MAX_BODY_BYTES);
+            assertError(oversized.send(), 400, "INVALID_REQUEST");
+            assertThat(keyRows()).isZero();
+
+            assertThat(req().seats(a).send().statusCode()).isEqualTo(201);
         }
     }
 

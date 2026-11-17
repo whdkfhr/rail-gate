@@ -360,7 +360,11 @@ B 는 응답을 저장 결과에서 **매번 다시 만든다.** 그래서 같�
 ### 10.1 구현에서 정한 것 (Task 2J-D)
 
 - 본문 상한 **4,096 바이트 [제안]** — 넘으면 파싱하지 않고 400 `INVALID_REQUEST`. 400 의 `details` 배열은 넣지 않았다.
-- 사전 조회(§3 단계 6)의 422 본문은 **저장된 422 와 같은 바이트**(`{code, message}`, traceId 는 헤더로만)다.
+- **사전 조회(§3 단계 6)의 422 와 저장된 422 는 본문이 다르다** (PR #37 리뷰로 정정). 사전 조회 422 는 키를 소비하지 않는 **현재 요청의 거절**이라
+  재생 대상이 아니고, 규칙 24 대로 `{code, message, traceId}`(본문 traceId = `X-Trace-Id`)다. TX1 에서 처음 드러나 **저장된** 422 만
+  실행·재생 모두 `{code, message}` 다(D1). 코드·상태·문구는 같다. 형식은 코드가 아니라 응답의 출처(현재 거절 / 저장 결과)로 정한다.
+- reservation-service 는 **multipart 를 끈다**(`spring.servlet.multipart.enabled=false`). 쓰는 기능이 없고, 켜 두면 MVC 가 컨트롤러 전에
+  multipart 본문을 파싱해 큰 파트가 계약의 415 대신 413 으로 끝났다.
 - `Content-Type: application/json;charset=UTF-8`. JSON 은 직렬화 라이브러리 없이 직접 쓴다 (§7.3 배포 간 호환).
 - 503 대상에 `CannotCreateTransactionException`(트랜잭션 시작 시 연결 실패)을 넣었다.
 - 응답 메트릭 `railgate.hold.http.responses{status, code, category}`.

@@ -48,14 +48,21 @@ final class HoldHttpResponses {
         };
     }
 
-    /** 오류 코드 하나의 응답. 재생 대상 코드면 저장된 결과와 같은 바이트(traceId 없음)를 만든다. */
+    /**
+     * <b>현재 요청을 거절하는 응답</b> — 저장되지 않으므로 재생 대상이 아니다. 규칙 24 대로 본문에 현재 traceId 를 담는다.
+     * 코드가 재생 대상 업무 실패와 같아도(사전 조회의 422) 이 형식이다 — 형식은 코드가 아니라 <b>응답의 출처</b>로 정한다.
+     */
     static HoldHttpResponse error(HoldErrorCode code, String traceId) {
-        String body = code.replayable
-                ? "{\"code\":\"" + code.name() + "\",\"message\":\"" + code.message + "\"}"
-                : "{\"code\":\"" + code.name() + "\",\"message\":\"" + code.message + "\",\"traceId\":"
-                        + (traceId == null ? "null" : "\"" + traceId + "\"") + "}";
+        String body = "{\"code\":\"" + code.name() + "\",\"message\":\"" + code.message + "\",\"traceId\":"
+                + (traceId == null ? "null" : "\"" + traceId + "\"") + "}";
         return new HoldHttpResponse(code.status, code, body, null,
                 code.retryAfter ? HoldErrorCode.RETRY_AFTER_SECONDS : null);
+    }
+
+    /** <b>저장된 업무 실패</b>에서 만드는 응답 — 실행·재생이 같은 바이트여야 하므로 본문은 {code, message} 뿐이다 (D1, 규칙 24 예외). */
+    private static HoldHttpResponse storedRejection(HoldErrorCode code) {
+        String body = "{\"code\":\"" + code.name() + "\",\"message\":\"" + code.message + "\"}";
+        return new HoldHttpResponse(code.status, code, body, null, null);
     }
 
     static HoldHttpResponse failure(RuntimeException failure, String traceId) {
@@ -80,7 +87,7 @@ final class HoldHttpResponses {
                         + ",\"seatCount\":" + succeeded.seatCount() + "}";
                 yield new HoldHttpResponse(201, null, body, LOCATION_PREFIX + holdId, null);
             }
-            case StoredHoldOutcome.Rejected rejected -> error(HoldErrorCode.of(rejected.code()), null);
+            case StoredHoldOutcome.Rejected rejected -> storedRejection(HoldErrorCode.of(rejected.code()));
         };
     }
 }

@@ -166,6 +166,41 @@ class HoldControllerFaultTest extends MySqlSpringTestSupport {
     }
 
     /**
+     * ★ PR #37 리뷰 — TX1 에서 처음 드러나 <b>저장된</b> 422 는 실행·재생 모두 {code, message} 본문이다. 기대값은 문구 상수가 아니라
+     * 기존 응답 바이트를 고정한 리터럴이다. Location 은 없고 Content-Type 은 같다. traceId 는 응답 헤더 몫이다(직접 호출이라 여기서는 보지 않는다).
+     */
+    @Test
+    // 사전 조회 직후 b 만 다른 회차의 운행편으로 옮긴다 — TX1 이 회차 혼합을 처음 보고 업무 실패로 저장한다.
+    void TX1_에서_저장된_422_는_실행과_재생이_같은_고정_바이트다() throws Exception {
+        long a = insertAvailableSeat(SCHEDULE, "1A");
+        long b = insertAvailableSeat(SCHEDULE, "1B");
+        ensureTrainSchedule(OTHER_SCHEDULE, OTHER_EVENT);
+        SimpleMeterRegistry local = new SimpleMeterRegistry();
+        String key = "stored-422-key-0001";
+        byte[] expected = "{\"code\":\"SALE_EVENT_SCOPE_REJECTED\",\"message\":\"선택한 좌석의 판매 회차를 하나로 확인할 수 없습니다.\"}"
+                .getBytes(StandardCharsets.UTF_8);
+
+        MockHttpServletResponse executed = call(new HoldController(holds, movingAfterPreCheck(b), local), key, a, b);
+
+        assertThat(executed.getStatus()).isEqualTo(422);
+        assertThat(executed.getContentAsByteArray()).isEqualTo(expected);
+        assertThat(executed.getHeader("Location")).isNull();
+        assertThat(keyRow(key)).containsEntry("state", "COMPLETED").containsEntry("result_type", "SALE_EVENT_SCOPE_REJECTED");
+        assertThat(statusOf(a)).isEqualTo("AVAILABLE");
+        assertThat(quotaRowCount()).isZero();
+
+        // 소속을 되돌리면 사전 조회를 통과하고, 같은 키는 저장된 422 를 재생한다 (재실행 없음).
+        jdbc().update("UPDATE seat_inventory SET schedule_id = ? WHERE id = ?", SCHEDULE, b);
+        MockHttpServletResponse replayed = call(new HoldController(holds, saleEventScope, local), key, b, a);
+
+        assertThat(replayed.getStatus()).isEqualTo(422);
+        assertThat(replayed.getContentAsByteArray()).isEqualTo(expected);
+        assertThat(replayed.getContentType()).isEqualTo(executed.getContentType());
+        assertThat(replayed.getHeader("Location")).isNull();
+        assertThat(statusOf(a)).as("재실행 없음").isEqualTo("AVAILABLE");
+    }
+
+    /**
      * ★ F2 — 커밋 결과 불명은 500 이고, 실제로는 커밋됐으므로 같은 키 재요청은 저장된 성공을 재생한다 (선점 1회).
      */
     @Test

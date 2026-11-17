@@ -221,11 +221,35 @@ class HoldHttpContractTest {
             assertThat(HoldHttpResponses.error(HoldErrorCode.ADMISSION_EVENT_MISMATCH, TRACE).status()).isEqualTo(403);
         }
 
-        /** 사전 조회의 422 는 저장된 422 와 같은 바이트다 — 어느 단계에서 드러났든 클라이언트가 같은 응답을 본다 (§3). */
+        /**
+         * ★ PR #37 리뷰 — 사전 조회의 422 는 <b>현재 요청을 거절하는 응답</b>이다. 저장되지 않으므로 재생 대상이 아니고 규칙 24 대로
+         * 본문에 현재 traceId 를 담는다. 코드·상태·문구는 저장된 422 와 같다.
+         */
         @Test
-        void 사전_조회_422_는_저장된_422_와_같은_바이트다() {
-            assertThat(HoldHttpResponses.error(HoldErrorCode.SALE_EVENT_SCOPE_REJECTED, TRACE))
-                    .isEqualTo(rejected(HoldRejectionCode.SALE_EVENT_SCOPE_REJECTED));
+        void 사전_조회_422_는_현재_traceId_를_담고_저장된_422_와_다르다() {
+            HoldHttpResponse preCheck = HoldHttpResponses.error(HoldErrorCode.SALE_EVENT_SCOPE_REJECTED, TRACE);
+
+            assertThat(preCheck.status()).isEqualTo(422);
+            assertThat(preCheck.body()).isEqualTo("{\"code\":\"SALE_EVENT_SCOPE_REJECTED\",\"message\":"
+                    + "\"선택한 좌석의 판매 회차를 하나로 확인할 수 없습니다.\",\"traceId\":\"" + TRACE + "\"}");
+            assertThat(preCheck.body()).isNotEqualTo(rejected(HoldRejectionCode.SALE_EVENT_SCOPE_REJECTED).body());
+        }
+
+        /**
+         * ★ 저장된 업무 실패의 응답 바이트를 <b>고정 리터럴</b>로 비교한다 — 구현의 문구 상수를 읽지 않는다. 문구·직렬화가 바뀌면 여기서
+         * 깨진다 (§7.3 배포 간 응답 호환 조건).
+         */
+        @Test
+        void 저장된_업무_실패의_본문_바이트는_고정이다() {
+            assertThat(rejected(HoldRejectionCode.SALE_EVENT_SCOPE_REJECTED).body()).isEqualTo("{\"code\":\"SALE_EVENT_SCOPE_REJECTED\",\"message\":\"선택한 좌석의 판매 회차를 하나로 확인할 수 없습니다.\"}");
+            assertThat(rejected(HoldRejectionCode.SEAT_UNAVAILABLE).body())
+                    .isEqualTo("{\"code\":\"SEAT_UNAVAILABLE\",\"message\":\"선택한 좌석 중 이미 선점된 좌석이 있습니다.\"}");
+            assertThat(rejected(HoldRejectionCode.QUOTA_EXCEEDED).body())
+                    .isEqualTo("{\"code\":\"QUOTA_EXCEEDED\",\"message\":\"1인당 선점할 수 있는 좌석 수를 넘었습니다.\"}");
+            for (HoldRejectionCode code : HoldRejectionCode.values()) {
+                assertThat(HoldHttpResponses.from(new IdempotentHoldResult.Replayed(new StoredHoldOutcome.Rejected(code)),
+                        "replay-trace").body()).isEqualTo(rejected(code).body());
+            }
         }
 
         @Test

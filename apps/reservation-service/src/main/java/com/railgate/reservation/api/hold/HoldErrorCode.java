@@ -7,10 +7,13 @@ import com.railgate.reservation.idempotency.HoldRejectionCode;
  *
  * <p>문구는 예외 메시지·SQL·사용자 id·멱등키·좌석 상태 상세를 담지 않는다. <b>재생 대상</b>({@link #replayable})의 문구·상태는
  * 재생 가능한 키가 남아 있는 동안 바꾸지 않는다 — 배포 간 응답 호환 조건 (§7.3, CLAUDE.md 규칙 24).
+ * {@code replayable} 은 "저장될 수 있는 코드" 라는 표시일 뿐 <b>본문 형식을 고르는 데 쓰지 않는다</b> — 형식은 응답이 저장 결과에서
+ * 왔는지 현재 요청의 거절인지로 정한다 ({@code HoldHttpResponses}, PR #37 리뷰).
  */
 enum HoldErrorCode {
 
-    // ---- 재생 대상 업무 실패 (본문 { code, message }, traceId 는 헤더로만)
+    // ---- 저장·재생될 수 있는 업무 실패. 저장된 결과에서 만들 때만 본문이 { code, message } 다 (traceId 는 헤더로만).
+    //      같은 코드라도 저장 전에 현재 요청을 거절하면(사전 조회 422) { code, message, traceId } 다 — HoldHttpResponses
     SEAT_UNAVAILABLE(409, "선택한 좌석 중 이미 선점된 좌석이 있습니다.", true, false, Category.NORMAL),
     QUOTA_EXCEEDED(409, "1인당 선점할 수 있는 좌석 수를 넘었습니다.", true, false, Category.NORMAL),
     SALE_EVENT_SCOPE_REJECTED(422, "선택한 좌석의 판매 회차를 하나로 확인할 수 없습니다.", true, false, Category.CLIENT_ERROR),

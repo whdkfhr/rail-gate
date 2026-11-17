@@ -38,8 +38,7 @@
 - JSON 은 직접 쓴다 — 값이 고정 문구·UUID·양의 정수뿐이고, 직렬화 설정 변경이 재생 바이트를 바꾸지 않게 하려는 것이다(§7.3 배포 간 호환).
   `Content-Type: application/json;charset=UTF-8` (보안 단계 오류와 같다).
 - 재생 대상(201, 409 `SEAT_UNAVAILABLE`·`QUOTA_EXCEEDED`, 422 `SALE_EVENT_SCOPE_REJECTED`) 본문에는 `traceId` 가 없다. 그 밖의 오류는 본문에 현재 traceId.
-- **사전 조회의 422 는 저장된 422 와 같은 바이트**로 냈다 — 어느 단계에서 드러났든 클라이언트가 같은 응답을 본다(§3 "코드와 상태는 같다").
-  키를 소비하지 않았으므로 재생 대상은 아니지만 본문 형식은 재생 대상 형식을 따른다. 규칙 24 예외의 범위를 넓힌 판단이라 리뷰 포인트로 남긴다.
+- ~~사전 조회의 422 는 저장된 422 와 같은 바이트로 냈다~~ → **PR #37 리뷰로 정정 (§6)**: 사전 조회 422 는 현재 요청의 거절이라 본문에 traceId 를 담는다.
 - 503: `TransientDataAccessException`(잠금 대기 초과·데드락·질의 시간 초과)·`PessimisticLockingFailureException`·`CannotGetJdbcConnectionException`·
   `CannotCreateTransactionException`(트랜잭션 시작 시 연결 실패). 그 밖(커밋 결과 불명 포함)은 500. 둘 다 ERROR 로그.
 
@@ -143,9 +142,48 @@ TASK-002J-B §9 의 1,305개에서 +117 (계약 72, HTTP 통합 33, 장애 경�
 - **I-7 은 선점 경로에서만** 강제된다. 홀드 조회·해제·결제 등 다른 좌석 HTTP API 는 아직 없다 — 생기면 같은 입장 검증을 붙여야 한다
 - 토큰 발급기가 없다(D-A1). 운영에서 입장 토큰을 받을 길이 없으므로 이 API 는 아직 실제 사용자가 쓸 수 없다
 - 리스 30초·`Retry-After` 1초·본문 상한 4,096 바이트·토큰 수명·시계 오차는 측정 근거 없는 가정값이다 (C4·D-A4 미결정)
-- 사전 조회 422 의 본문 형식(재생 대상과 같은 바이트) — 규칙 24 예외의 범위 판단이다
 - `HoldIdempotencyFailureWindowTest` 의 실험 저장소 동시 INSERT 데드락 간헐 실패 (위 §4)
 - 사전 조회와 TX1 이 같은 회차 조회를 두 번 한다 — 요청당 조회 1회 추가 비용은 측정하지 않았다
 - 보존 기간 삭제가 없어 배포 간 응답 호환 조건(§7.3)이 무기한 걸린다
 - 재생도 사전 회차 대조를 거치므로, 좌석이 삭제·이동(정상 경로에는 없음)되면 같은 키가 저장된 결과 대신 422·403 을 받는다 — 계약이 정한 교환이다
 - 커밋 결과 불명이 일시 장애 예외로 번역되면 500 이 아니라 503 으로 분류될 수 있다 (재시도 안전성은 같다)
+
+---
+
+## 6. PR #37 리뷰 보완 (2026-11-17)
+
+### 6.1 multipart 선처리 제거
+
+- **사용처 확인** — `apps`·`modules` 의 운영·테스트 소스에 `MultipartFile`·`@RequestPart`·multipart 설정이 없다(`grep`). 테스트의 `multipart/form-data`
+  Content-Type 문자열(415 대상) 하나뿐이다.
+- **원인** — Spring Boot 기본값으로 multipart 가 켜져 있어 DispatcherServlet 이 컨트롤러 전에 multipart 본문을 파싱한다.
+- **수정** — `application.yml` 에 `spring.servlet.multipart.enabled: false`. 선점 경로만 보호하는 대안은 필요 없었다(다른 사용처 없음).
+- **RED** — `HoldControllerIntegrationTest` §4-1 의 큰 파트(2MB) multipart 요청이 컨트롤러 전에 **413** 으로 끝났다(기대 415). 같은 묶음의 나머지
+  4개(인증 없음 401, 키 없음 400, 정상·깨진 multipart 415, 정상 JSON·본문 상한)는 **수정 전에도 통과**했다 — 작은 본문은 파싱돼도 컨트롤러가 같은 응답을 냈다.
+- **GREEN** — 5/5. 415 는 고정 본문(리터럴 비교)·본문 traceId = `X-Trace-Id`, 조정자 미호출·멱등키·좌석·quota 불변을 확인한다.
+
+### 6.2 사전 조회 422 와 저장된 422 분리
+
+- **수정** — `HoldHttpResponses.error` 는 코드와 무관하게 **현재 요청의 거절**(`{code, message, traceId}`)만 만든다. 저장된 업무 실패는 별도
+  `storedRejection` 이 `{code, message}` 로 만든다. `HoldErrorCode.replayable` 은 형식 선택에 더는 쓰지 않는다(저장될 수 있는 코드 표시만).
+- **RED** — 계약 단위 테스트 1개(사전 조회 422 본문에 traceId)와 HTTP 1개(없는 좌석·회차 혼합 422 의 본문 traceId = 헤더)가 실패.
+- **수정 전에도 통과한 회귀 테스트** — 저장된 409·422 본문의 **고정 리터럴 바이트**(구현 상수를 읽지 않는다), TX1 에서 처음 드러나 저장된 422 의
+  실행·재생 바이트 동일(`HoldControllerFaultTest`, 사전 조회 직후 좌석 하나를 다른 회차로 옮겨 TX1 이 혼합을 처음 보게 함 — 필터 체인 없이 직접 호출),
+  기존 201·409 실행·재생 HTTP 테스트. 저장 경로는 바꾸지 않았으므로 RED 로 세지 않았다.
+- 규칙 24·D1 은 바꾸지 않았다 — 이전 판단(사전 조회 422 를 재생 형식으로)이 규칙 24 예외를 넓힌 것이었고, 그것을 되돌렸다.
+
+### 6.3 전체 검증
+
+2026-11-17, `docker info`(27.3.1) 확인 후 좁힌 테스트(인증·입장·선점 HTTP·계약·장애 207개, 실패 0), 이어서
+`./gradlew check --rerun-tasks --max-workers=1` — `BUILD SUCCESSFUL in 1m 43s`, 24 tasks, `verifyArchitectureRules` 포함.
+
+| 모듈 | tests | failures | errors | skipped |
+|---|---:|---:|---:|---:|
+| `apps:queue-service` | 1 | 0 | 0 | 0 |
+| `apps:reservation-service` | 543 | 0 | 0 | 0 |
+| `modules:reservation-domain` | 202 | 0 | 0 | 0 |
+| `modules:reservation-infra` | 621 | 0 | 0 | 0 |
+| `modules:queue-token` | 62 | 0 | 0 | 0 |
+| **합계** | **1,429** | **0** | **0** | **0** |
+
+§4 의 1,422개에서 +7 (multipart 5, 저장된 422 고정 바이트 1, TX1 저장 422 실행·재생 1 — 사전 조회 422 계약 테스트는 이름·기대값을 바꿨다).
