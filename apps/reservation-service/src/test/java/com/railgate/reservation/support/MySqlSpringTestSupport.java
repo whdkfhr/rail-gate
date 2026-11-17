@@ -126,6 +126,16 @@ public abstract class MySqlSpringTestSupport {
                 Long.class, scheduleId, seatNo);
     }
 
+    /**
+     * 좌석이 속한 판매 회차 — 선점 명령의 기대 회차(D4)를 픽스처에서 정할 때 쓴다. 운영에서는 입장 토큰의 {@code evt} 가
+     * 이 자리에 들어간다. 입장 권한이 주제가 아닌 테스트가 좌석과 맞는 회차를 쓰게 하려는 것이지 검사를 끄는 것이 아니다.
+     */
+    protected com.railgate.reservation.saleevent.SaleEventId saleEventOf(long seatId) {
+        return new com.railgate.reservation.saleevent.SaleEventId(jdbc.queryForObject("""
+                SELECT ts.sale_event_id FROM seat_inventory s JOIN train_schedule ts ON ts.id = s.schedule_id WHERE s.id = ?
+                """, Long.class, seatId));
+    }
+
     protected String statusOf(long seatId) {
         return jdbc.queryForObject(
                 "SELECT status FROM seat_inventory WHERE id = ?", String.class, seatId);

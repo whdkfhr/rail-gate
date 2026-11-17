@@ -6,6 +6,7 @@ import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.application.hold.HoldSeatsCommand;
 import com.railgate.reservation.application.hold.HoldSeatsService;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.support.MySqlSpringTestSupport;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -97,7 +98,7 @@ class ExpirySchedulerProgressIntegrationTest extends MySqlSpringTestSupport {
             failing.add(id);
         }
         long normal = insertAvailableSeat(SCHEDULE, "1A");
-        holdSeats.hold(new HoldSeatsCommand(OWNER, List.of(new SeatId(normal))));
+        holdSeats.hold(new HoldSeatsCommand(OWNER, List.of(new SeatId(normal)), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
         expireSecondsAgo(normal, 10);                        // 실패 후보들보다 나중 → 항상 뒤
 
         // 한 tick 으로는 예산이 실패 후보로 가득 차 도달하지 못한다.
@@ -139,7 +140,7 @@ class ExpirySchedulerProgressIntegrationTest extends MySqlSpringTestSupport {
         long orphan = insertAvailableSeat(SCHEDULE, "1A");
         expiredHeldWithoutQuota(ORPHAN, orphan, 60);
         long normal = insertAvailableSeat(SCHEDULE, "1B");
-        holdSeats.hold(new HoldSeatsCommand(OWNER, List.of(new SeatId(normal))));
+        holdSeats.hold(new HoldSeatsCommand(OWNER, List.of(new SeatId(normal)), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
         expireSecondsAgo(normal, 10);
 
         // 순회를 끝까지 돌려 정상 좌석까지 회수한다.

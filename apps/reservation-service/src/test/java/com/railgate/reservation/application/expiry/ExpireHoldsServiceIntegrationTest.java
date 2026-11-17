@@ -19,6 +19,7 @@ import com.railgate.reservation.expiry.SeatExpiryPort;
 import com.railgate.reservation.hold.SeatConfirmationOutcome;
 import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.support.MySqlSpringTestSupport;
 import java.sql.SQLException;
@@ -94,7 +95,7 @@ class ExpireHoldsServiceIntegrationTest extends MySqlSpringTestSupport {
     }
 
     private HoldId holdViaService(UserId user, List<SeatId> seats) {
-        return holdSeats.hold(new HoldSeatsCommand(user, seats)).holdId();
+        return holdSeats.hold(new HoldSeatsCommand(user, seats, saleEventOf(seats.getFirst().value()))).holdId();
     }
 
     /** 롤백 검증용 — 좌석의 관련 7개 필드 전부. {@code null} 도 값으로 비교된다. */

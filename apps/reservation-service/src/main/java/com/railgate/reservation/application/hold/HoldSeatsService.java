@@ -34,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <ol>
  *   <li><b>요청 검증</b> — {@link HoldSeatsCommand} 생성자가 한다. 트랜잭션 밖이다</li>
  *   <li><b>판매 회차 해석</b> — 좌석으로부터 서버가 정한다. 클라이언트 값을 믿지 않는다</li>
+ *   <li><b>입장 회차 재대조 (D4)</b> — 해석한 회차가 인증된 입장 회차와 다르면 거부한다</li>
  *   <li><b>quota 행 확보</b> — 없으면 만들고, 있으면 값을 보존한다</li>
  *   <li><b>quota 조건부 증가</b> — 검사와 증가를 한 문장으로 (규칙 8)</li>
  *   <li><b>다좌석 원자 선점</b> — 전부 또는 전무 (I-9)</li>
@@ -64,7 +65,7 @@ import org.springframework.transaction.annotation.Transactional;
  *       <b>따라서 카운터는 실제보다 계속 커진다.</b> 세 경로 연동 전에는 운영에 켜면 안 된다</li>
  *   <li><b>감사 로그</b>(규칙 32) — {@code seat_state_log} 테이블이 없다</li>
  *   <li><b>메트릭</b>(규칙 35) — 선점 성공/상한 초과/경합 계측이 없다</li>
- *   <li><b>REST API</b> — 호출하는 진입점이 없다</li>
+ *   <li><b>직접 REST API</b> — 운영 진입점은 멱등 조정자를 거치는 {@code POST /api/reservations/holds} 뿐이다 (Task 2J-D)</li>
  * </ul>
  */
 @Service
@@ -92,6 +93,7 @@ public class HoldSeatsService {
      * 검사가 보는 것은 프록시 유무가 아니라 실제 트랜잭션 참여 여부다.
      *
      * @throws SaleEventScopeException  좌석이 존재하지 않거나 서로 다른 회차에 걸쳐 있는 경우
+     * @throws AdmissionEventMismatchException 해석한 회차가 인증된 입장 회차와 다른 경우 (D4). quota·좌석 변경 전이다
      * @throws QuotaExceededException   1인당 상한(4석)을 넘는 경우
      * @throws SeatUnavailableException 요청 좌석 중 하나 이상이 이미 남의 것인 경우
      * @throws IllegalStateException    저장소가 트랜잭션에 참여하지 못한 경우 (배선 실수)
@@ -106,6 +108,13 @@ public class HoldSeatsService {
         // 2. 좌석에서 회차를 해석한다. 존재하지 않는 좌석과 회차 혼합이 여기서 걸러진다.
         //    같은 회차의 여러 운행편은 하나의 회차로 해석되므로 quota 가 자연히 합산된다.
         SaleEventId saleEventId = saleEventScope.resolve(command.seatIds());
+
+        // 2-1. ★ D4 — 해석한 회차가 인증된 입장 회차와 같은지 TX1 안에서 다시 본다 (HOLD_HTTP_CONTRACT §8.1).
+        //      HTTP 계층의 사전 대조와 이 조회 사이에 좌석 소속이 바뀌는 것은 정상 경로에 없지만, 바뀌었다면 quota·좌석을
+        //      건드리기 전에 거부한다. 기대값으로 회차를 고르지 않는다 — 해석 결과가 기준이고 기대값은 검사 대상이다.
+        if (!saleEventId.equals(command.expectedSaleEventId())) {
+            throw new AdmissionEventMismatchException();
+        }
 
         // 3~4. quota 를 좌석보다 먼저 잠근다 (TASK-002G-B).
         quota.ensureRow(saleEventId, userId);

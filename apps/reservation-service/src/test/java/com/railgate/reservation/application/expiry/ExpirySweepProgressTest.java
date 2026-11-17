@@ -13,6 +13,7 @@ import com.railgate.reservation.application.hold.ReleaseHoldService;
 import com.railgate.reservation.ReservationId;
 import com.railgate.reservation.expiry.ExpiryCursor;
 import com.railgate.reservation.infra.seat.JdbcSeatPaymentRepository;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.support.MySqlSpringTestSupport;
 import java.time.Duration;
@@ -142,7 +143,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
         void 손상_좌석_뒤의_정상_좌석이_여러_번_실행해도_회수된다() {
             long broken = insertAvailableSeat(SCHEDULE, "1A");
             long normal = insertAvailableSeat(SCHEDULE, "1B");
-            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(broken, normal)));
+            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(broken, normal), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
             expireSecondsAgo(broken, 60);    // 더 오래됨 → 항상 첫 후보
             expireSecondsAgo(normal, 10);
             jdbc().update("UPDATE seat_inventory SET held_by = NULL WHERE id = ?", broken);
@@ -170,7 +171,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
         void quota_행_없는_좌석_뒤의_정상_좌석이_여러_번_실행해도_회수된다() {
             long orphan = insertAvailableSeat(SCHEDULE, "1A");
             long normal = insertAvailableSeat(SCHEDULE, "1B");
-            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal)));
+            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
             expireSecondsAgo(normal, 10);
             expiredHeldWithoutQuota(ORPHAN, orphan, 60);   // 더 오래됨 → 항상 첫 후보
 
@@ -206,7 +207,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
                 broken.add(id);
             }
             long normal = insertAvailableSeat(SCHEDULE, "1A");
-            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal)));
+            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
             expireSecondsAgo(normal, 10);
 
             ExpirySweepResult result = service.sweep(
@@ -232,7 +233,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
                 expiredHeldWithoutQuota(ORPHAN, id, 60 - i);
             }
             long normal = insertAvailableSeat(SCHEDULE, "1A");
-            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal)));
+            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
             expireSecondsAgo(normal, 10);
 
             ExpirySweepRequest request = ExpirySweepRequest.fromStart(1, 1);   // 한 번에 1페이지만
@@ -272,7 +273,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
                 expiredHeldWithoutQuota(ORPHAN, id, 100 - i);
             }
             long normal = insertAvailableSeat(SCHEDULE, "1A");
-            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal)));
+            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
             expireSecondsAgo(normal, 10);               // 실패 후보들보다 나중 → 항상 뒤
 
             // (1) 처음부터 반복 — 예산이 실패 후보로 가득 차 도달하지 못한다.
@@ -311,7 +312,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
             long orphan = insertAvailableSeat(SCHEDULE, "1A");
             expiredHeldWithoutQuota(ORPHAN, orphan, 60);
             long normal = insertAvailableSeat(SCHEDULE, "1B");
-            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal)));
+            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(normal), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
             expireSecondsAgo(normal, 10);
 
             ExpirySweepResult first = service.sweep(1);
@@ -350,7 +351,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
                 long id = insertAvailableSeat(SCHEDULE, "P" + i);
                 seats.add(new SeatId(id));
             }
-            holdSeats.hold(new HoldSeatsCommand(OWNER, seats));
+            holdSeats.hold(new HoldSeatsCommand(OWNER, seats, new SaleEventId(FIXTURE_SALE_EVENT_ID)));
             for (int i = 0; i < 4; i++) {
                 expireSecondsAgo(seats.get(i).value(), 40 - i * 5);
             }
@@ -371,7 +372,7 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
             for (int i = 0; i < 4; i++) {
                 seats.add(new SeatId(insertAvailableSeat(SCHEDULE, "T" + i)));
             }
-            holdSeats.hold(new HoldSeatsCommand(OWNER, seats));
+            holdSeats.hold(new HoldSeatsCommand(OWNER, seats, new SaleEventId(FIXTURE_SALE_EVENT_ID)));
             // 네 좌석의 expires_at 을 완전히 같게 만든다.
             jdbc().update("UPDATE seat_inventory SET expires_at = DATE_SUB(NOW(3), INTERVAL 30 SECOND) "
                     + "WHERE id IN (?, ?, ?, ?)",
@@ -399,8 +400,8 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
         void 앞_그룹이_감소_거절로_실패해도_뒤_그룹은_커밋된다() {
             long failing = insertAvailableSeat(SCHEDULE, "1A");
             long ok = insertAvailableSeat(SCHEDULE, "1B");
-            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(failing)));    // userId 61 — 먼저
-            holdSeats.hold(new HoldSeatsCommand(ORPHAN, ids(ok)));        // userId 62 — 나중
+            holdSeats.hold(new HoldSeatsCommand(OWNER, ids(failing), new SaleEventId(FIXTURE_SALE_EVENT_ID)));    // userId 61 — 먼저
+            holdSeats.hold(new HoldSeatsCommand(ORPHAN, ids(ok), new SaleEventId(FIXTURE_SALE_EVENT_ID)));        // userId 62 — 나중
             expireSecondsAgo(failing, 60);
             expireSecondsAgo(ok, 10);
             jdbc().update("UPDATE user_hold_quota SET held_seats = 0 WHERE user_id = ?", OWNER.value());
@@ -442,8 +443,8 @@ class ExpirySweepProgressTest extends MySqlSpringTestSupport {
             long confirmed = insertAvailableSeat(SCHEDULE, "1B");
             long released = insertAvailableSeat(SCHEDULE, "1C");
             long extended = insertAvailableSeat(SCHEDULE, "1D");
-            HoldId holdA = holdSeats.hold(new HoldSeatsCommand(OWNER, ids(first, confirmed, extended))).holdId();
-            HoldId holdB = holdSeats.hold(new HoldSeatsCommand(ORPHAN, ids(released))).holdId();
+            HoldId holdA = holdSeats.hold(new HoldSeatsCommand(OWNER, ids(first, confirmed, extended), new SaleEventId(FIXTURE_SALE_EVENT_ID))).holdId();
+            HoldId holdB = holdSeats.hold(new HoldSeatsCommand(ORPHAN, ids(released), new SaleEventId(FIXTURE_SALE_EVENT_ID))).holdId();
             // startPayment 는 만료 전에만 가능하다 (expires_at > NOW(3)).
             assertThat(new JdbcSeatPaymentRepository(dataSource(), Duration.ofMinutes(5))
                     .startPayment(new SeatId(confirmed), holdA))

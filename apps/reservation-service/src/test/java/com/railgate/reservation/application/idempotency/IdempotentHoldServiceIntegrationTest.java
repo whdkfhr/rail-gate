@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
+import com.railgate.reservation.application.hold.AdmissionEventMismatchException;
 import com.railgate.reservation.application.hold.HoldSeatsCommand;
 import com.railgate.reservation.application.hold.HoldSeatsResult;
 import com.railgate.reservation.application.hold.HoldSeatsService;
@@ -20,6 +21,7 @@ import com.railgate.reservation.infra.idempotency.JdbcIdempotencyKeyRepository;
 import com.railgate.reservation.infra.quota.JdbcUserHoldQuotaRepository;
 import com.railgate.reservation.infra.saleevent.JdbcSaleEventScopeRepository;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.support.MySqlSpringTestSupport;
 import com.zaxxer.hikari.HikariDataSource;
@@ -108,7 +110,7 @@ class IdempotentHoldServiceIntegrationTest extends MySqlSpringTestSupport {
     // ------------------------------------------------------------------ 픽스처
 
     private static HoldSeatsCommand command(UserId user, long... seats) {
-        return new HoldSeatsCommand(user, Arrays.stream(seats).mapToObj(SeatId::new).toList());
+        return new HoldSeatsCommand(user, Arrays.stream(seats).mapToObj(SeatId::new).toList(), new SaleEventId(FIXTURE_SALE_EVENT_ID));
     }
 
     /** 같은 빈들로 만든 조정자. 본 작업 직전에 {@code before} 를, 직후(같은 TX1 안)에 {@code after} 를 실행한다. */
@@ -378,6 +380,67 @@ class IdempotentHoldServiceIntegrationTest extends MySqlSpringTestSupport {
     }
 
     // ------------------------------------------------------------------ §4 동시
+
+    @Nested
+    @DisplayName("§3-1 ★ D4 — TX1 안의 입장 회차 재대조 (실제 HoldSeatsService·MySQL)")
+    class D4_회차_재대조 {
+
+        private static final SaleEventId OTHER_EVENT = new SaleEventId(9_700_000L);
+
+        private HoldSeatsCommand expecting(SaleEventId expected, long... seats) {
+            return new HoldSeatsCommand(USER_A, Arrays.stream(seats).mapToObj(SeatId::new).toList(), expected);
+        }
+
+        /**
+         * ★ 좌석의 회차(FIXTURE)와 기대 회차(OTHER)가 다르면 quota·좌석을 건드리기 전에 거부하고, 결과 없는 진행 중 행과
+         * 만료된 리스만 남긴다 — 사전 거절의 "키 행 없음" 과 다르다.
+         */
+        @Test
+        void 불일치는_좌석_quota_를_바꾸지_않고_결과_없는_만료된_진행_중_행만_남긴다() {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+
+            assertThatThrownBy(() -> service.hold(KEY, expecting(OTHER_EVENT, a)))
+                    .isInstanceOf(AdmissionEventMismatchException.class);
+
+            assertThat(statusOf(a)).isEqualTo("AVAILABLE");
+            assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value())).as("좌석 회차 quota 행 없음").isEqualTo(-1);
+            assertThat(quotaOf(OTHER_EVENT.value(), USER_A.value())).as("기대 회차 quota 행 없음").isEqualTo(-1);
+            assertThat(keyRow(USER_A, KEY)).containsEntry("state", "IN_PROGRESS").containsEntry("lease_expired", 1L);
+            assertThat(keyRow(USER_A, KEY).get("result_type")).as("업무 실패로 저장하지 않는다").isNull();
+            assertThat(keyRow(USER_A, KEY).get("hold_id")).isNull();
+        }
+
+        /** 같은 키·같은 요청(순서만 다름)은 만료된 리스를 인수해 다시 대조하고, 맞으면 실행한다. */
+        @Test
+        void 같은_키_같은_요청은_인수해_다시_대조한다() {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            long b = insertAvailableSeat(SCHEDULE, "1B");
+            assertThatThrownBy(() -> service.hold(KEY, expecting(OTHER_EVENT, a, b)))
+                    .isInstanceOf(AdmissionEventMismatchException.class);
+
+            assertThatThrownBy(() -> service.hold(KEY, expecting(OTHER_EVENT, b, a)))
+                    .as("다시 대조해도 다르면 다시 거부").isInstanceOf(AdmissionEventMismatchException.class);
+            assertThat(keyRow(USER_A, KEY)).containsEntry("fence", 2L).containsEntry("state", "IN_PROGRESS");
+
+            IdempotentHoldResult result = service.hold(KEY, expecting(new SaleEventId(FIXTURE_SALE_EVENT_ID), b, a));
+            assertThat(result).isInstanceOf(IdempotentHoldResult.Executed.class);
+            assertThat(keyRow(USER_A, KEY)).containsEntry("fence", 3L).containsEntry("state", "COMPLETED");
+            assertThat(statusOf(a)).isEqualTo("HELD");
+            assertThat(statusOf(b)).isEqualTo("HELD");
+        }
+
+        @Test
+        void 같은_키_다른_좌석은_fingerprint_불일치다() {
+            long a = insertAvailableSeat(SCHEDULE, "1A");
+            long b = insertAvailableSeat(SCHEDULE, "1B");
+            assertThatThrownBy(() -> service.hold(KEY, expecting(OTHER_EVENT, a)))
+                    .isInstanceOf(AdmissionEventMismatchException.class);
+
+            assertThat(service.hold(KEY, expecting(new SaleEventId(FIXTURE_SALE_EVENT_ID), b)))
+                    .isInstanceOf(IdempotentHoldResult.FingerprintMismatch.class);
+            assertThat(statusOf(b)).isEqualTo("AVAILABLE");
+        }
+    }
 
     @Nested
     @DisplayName("§4 ★ 같은 키 동시 요청")

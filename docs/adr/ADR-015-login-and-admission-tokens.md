@@ -5,7 +5,8 @@
 >
 > **구현 상태** — 액세스 토큰 검증(§3, [TASK-002J-B](../experiments/TASK-002J-B-access-token-validation.md)),
 > **입장 토큰 검증(§4)과 두 토큰의 사용자 대조(§5 의 1)** ([TASK-002J-C](../experiments/TASK-002J-C-admission-token-validation.md)).
-> 입장 `evt` 와 요청 좌석 회차의 대조(§5 의 2)는 Task 2J-D, 발급 엔드포인트·개발 전용 발급(§6)·blocklist 는 없다.
+> 입장 `evt` 와 요청 좌석 회차의 대조(§5 의 2)는 Task 2J-D 에서 사전 대조 + TX1 재대조(D4)로 구현했다
+> ([TASK-002J-D](../experiments/TASK-002J-D-hold-http.md)). 발급 엔드포인트·개발 전용 발급(§6)·blocklist 는 없다.
 >
 > 관련: [REQUIREMENTS.md](../REQUIREMENTS.md) FR-2.1·P-9·P-13, [INVARIANTS.md](../INVARIANTS.md) I-6·I-7·I-20,
 > [ARCHITECTURE.md](../ARCHITECTURE.md) §5.2, [HOLD_HTTP_CONTRACT.md](../HOLD_HTTP_CONTRACT.md), CLAUDE.md 절대 규칙 3·4, 규칙 34

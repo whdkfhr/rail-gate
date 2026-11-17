@@ -8,6 +8,7 @@ import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.hold.SeatHoldPort;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.saleevent.SaleEventScopeException;
 import com.railgate.reservation.saleevent.SaleEventScopePort;
 import com.railgate.reservation.seat.SeatId;
@@ -74,7 +75,7 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             long a = insertAvailableSeat(SCHEDULE, "1A");
             long b = insertAvailableSeat(SCHEDULE, "1B");
 
-            HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER_A, ids(a, b)));
+            HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER_A, ids(a, b), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
 
             assertThat(result.seatCount()).isEqualTo(2);
             assertThat(result.saleEventId().value()).isEqualTo(FIXTURE_SALE_EVENT_ID);
@@ -89,7 +90,7 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
         void 회차를_좌석에서_해석한다() {
             long seat = insertAvailableSeat(8_100L, "1A", OTHER_EVENT);
 
-            HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER_A, ids(seat)));
+            HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER_A, ids(seat), new SaleEventId(OTHER_EVENT)));
 
             assertThat(result.saleEventId().value()).isEqualTo(OTHER_EVENT);
             assertThat(quotaOf(OTHER_EVENT, USER_A.value())).isEqualTo(1);
@@ -107,8 +108,8 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             long a = insertAvailableSeat(SCHEDULE, "1A");
             long b = insertAvailableSeat(OTHER_SCHEDULE, "1A");
 
-            service.hold(new HoldSeatsCommand(USER_A, ids(a)));
-            service.hold(new HoldSeatsCommand(USER_A, ids(b)));
+            service.hold(new HoldSeatsCommand(USER_A, ids(a), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
+            service.hold(new HoldSeatsCommand(USER_A, ids(b), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
 
             assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value()))
                     .as("★ 운행편이 달라도 회차가 같으면 합산된다").isEqualTo(2);
@@ -124,7 +125,7 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
         void 없는_좌석이_섞이면_거부하고_아무것도_남기지_않는다() {
             long a = insertAvailableSeat(SCHEDULE, "1A");
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, 999_999L))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, 999_999L), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .isInstanceOf(SaleEventScopeException.class);
 
             assertThat(quotaRowCount()).isZero();
@@ -137,7 +138,7 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             long a = insertAvailableSeat(SCHEDULE, "1A");
             long b = insertAvailableSeat(8_100L, "1A", OTHER_EVENT);
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, b))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, b), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .isInstanceOf(SaleEventScopeException.class);
 
             assertThat(quotaRowCount()).isZero();
@@ -146,11 +147,11 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
 
         @Test
         void 빈_목록과_중복과_상한_초과는_명령_생성에서_거부된다() {
-            assertThatThrownBy(() -> new HoldSeatsCommand(USER_A, List.of()))
+            assertThatThrownBy(() -> new HoldSeatsCommand(USER_A, List.of(), new SaleEventId(FIXTURE_SALE_EVENT_ID)))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> new HoldSeatsCommand(USER_A, ids(1, 1)))
+            assertThatThrownBy(() -> new HoldSeatsCommand(USER_A, ids(1, 1), new SaleEventId(FIXTURE_SALE_EVENT_ID)))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> new HoldSeatsCommand(USER_A, ids(1, 2, 3, 4, 5)))
+            assertThatThrownBy(() -> new HoldSeatsCommand(USER_A, ids(1, 2, 3, 4, 5), new SaleEventId(FIXTURE_SALE_EVENT_ID)))
                     .isInstanceOf(IllegalArgumentException.class);
 
             assertThat(quotaRowCount()).as("DB 를 건드리지 않는다").isZero();
@@ -169,9 +170,9 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             long d = insertAvailableSeat(SCHEDULE, "1D");
             long e = insertAvailableSeat(SCHEDULE, "1E");
 
-            service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c, d)));
+            service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c, d), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(e))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(e), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .isInstanceOf(QuotaExceededException.class);
 
             assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value()))
@@ -190,11 +191,11 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             long other = insertAvailableSeat(SCHEDULE, "1E");
             long otherEventSeat = insertAvailableSeat(8_100L, "1A", OTHER_EVENT);
 
-            service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c, d)));
+            service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c, d), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
 
-            assertThatCode(() -> service.hold(new HoldSeatsCommand(USER_B, ids(other))))
+            assertThatCode(() -> service.hold(new HoldSeatsCommand(USER_B, ids(other), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .as("다른 사용자는 영향받지 않는다").doesNotThrowAnyException();
-            assertThatCode(() -> service.hold(new HoldSeatsCommand(USER_A, ids(otherEventSeat))))
+            assertThatCode(() -> service.hold(new HoldSeatsCommand(USER_A, ids(otherEventSeat), new SaleEventId(OTHER_EVENT))))
                     .as("★ 같은 사용자라도 다른 회차는 독립이다").doesNotThrowAnyException();
 
             assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value())).isEqualTo(4);
@@ -220,9 +221,9 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             long b = insertAvailableSeat(SCHEDULE, "1B");
             long c = insertAvailableSeat(SCHEDULE, "1C");
 
-            service.hold(new HoldSeatsCommand(USER_B, ids(b)));   // b 를 선점당한 상태로 만든다
+            service.hold(new HoldSeatsCommand(USER_B, ids(b), new SaleEventId(FIXTURE_SALE_EVENT_ID)));   // b 를 선점당한 상태로 만든다
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .isInstanceOf(SeatUnavailableException.class)
                     .isNotInstanceOf(QuotaExceededException.class);
 
@@ -239,17 +240,17 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
         @Test
         void 경합_실패_뒤에_같은_사용자가_다시_4석을_잡을_수_있다() {
             long taken = insertAvailableSeat(SCHEDULE, "9Z");
-            service.hold(new HoldSeatsCommand(USER_B, ids(taken)));
+            service.hold(new HoldSeatsCommand(USER_B, ids(taken), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
 
             long a = insertAvailableSeat(SCHEDULE, "1A");
             long b = insertAvailableSeat(SCHEDULE, "1B");
             long c = insertAvailableSeat(SCHEDULE, "1C");
             long d = insertAvailableSeat(SCHEDULE, "1D");
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, taken))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, taken), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .isInstanceOf(SeatUnavailableException.class);
 
-            assertThatCode(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c, d))))
+            assertThatCode(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c, d), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .as("★ 상한이 소진되지 않았다").doesNotThrowAnyException();
             assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value())).isEqualTo(4);
         }
@@ -308,7 +309,7 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
         private boolean attempt(CountDownLatch start, List<SeatId> seats) throws Exception {
             start.await(30, TimeUnit.SECONDS);
             try {
-                service.hold(new HoldSeatsCommand(USER_A, seats));
+                service.hold(new HoldSeatsCommand(USER_A, seats, new SaleEventId(FIXTURE_SALE_EVENT_ID)));
                 return true;
             } catch (QuotaExceededException expected) {
                 return false;
@@ -336,7 +337,7 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
                     new TransactionTemplate(new DataSourceTransactionManager(dataSource()));
 
             assertThatThrownBy(() -> outer.executeWithoutResult(status -> {
-                HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER_A, ids(a, b)));
+                HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER_A, ids(a, b), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
 
                 assertThat(result.seatCount()).as("트랜잭션 안에서는 성공한다").isEqualTo(2);
                 assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value())).isEqualTo(2);
@@ -405,7 +406,7 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             long b = insertAvailableSeat(SCHEDULE, "1B");
             long c = insertAvailableSeat(SCHEDULE, "1C");
 
-            service.hold(new HoldSeatsCommand(USER_B, ids(b)));   // b 를 선점당한 상태로 만든다
+            service.hold(new HoldSeatsCommand(USER_B, ids(b), new SaleEventId(FIXTURE_SALE_EVENT_ID)));   // b 를 선점당한 상태로 만든다
 
             assertThatCode(() -> 삼키는_선점(ids(a, b, c)))
                     .as("대조군은 예외를 밖으로 내보내지 않는다 — 여기까지가 §4 의 RED 가 본 전부다")
@@ -437,9 +438,9 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             long b = insertAvailableSeat(SCHEDULE, "1B");
             long c = insertAvailableSeat(SCHEDULE, "1C");
 
-            service.hold(new HoldSeatsCommand(USER_B, ids(b)));
+            service.hold(new HoldSeatsCommand(USER_B, ids(b), new SaleEventId(FIXTURE_SALE_EVENT_ID)));
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER_A, ids(a, b, c), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .isInstanceOf(SeatUnavailableException.class);
 
             assertThat(quotaOf(FIXTURE_SALE_EVENT_ID, USER_A.value()))
@@ -470,7 +471,7 @@ class HoldSeatsServiceIntegrationTest extends MySqlSpringTestSupport {
             HoldSeatsService unproxied =
                     new HoldSeatsService(saleEventScope, quota, seatHold);
 
-            assertThatThrownBy(() -> unproxied.hold(new HoldSeatsCommand(USER_A, ids(seat))))
+            assertThatThrownBy(() -> unproxied.hold(new HoldSeatsCommand(USER_A, ids(seat), new SaleEventId(FIXTURE_SALE_EVENT_ID))))
                     .as("★ 프록시가 없으면 경계가 없다")
                     .isInstanceOf(IllegalStateException.class);
 

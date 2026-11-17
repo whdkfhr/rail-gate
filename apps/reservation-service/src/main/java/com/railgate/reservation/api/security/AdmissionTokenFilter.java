@@ -14,8 +14,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
@@ -51,6 +54,13 @@ public final class AdmissionTokenFilter extends OncePerRequestFilter {
     static final String PROTECTED_PATH = "/api/reservations/holds";
     static final String METRIC = "railgate.auth.admission";
 
+    /**
+     * 선점 경로 판정. 원문 URI 문자열이 아니라 <b>MVC 가 컨트롤러를 고르는 것과 같은 경로 해석</b>(디코딩한 경로의 패턴 매칭)으로 본다 —
+     * 원문으로만 비교하면 {@code /api/reservations/%68olds} 가 이 필터를 건너뛰고 같은 컨트롤러에 닿는다 (Task 2J-D 리뷰).
+     */
+    private static final RequestMatcher PROTECTED =
+            PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, PROTECTED_PATH);
+
     private final AdmissionTokenVerifier verifier;
     private final MeterRegistry meters;
 
@@ -61,8 +71,7 @@ public final class AdmissionTokenFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI().substring(request.getContextPath().length());
-        return !(PROTECTED_METHOD.equals(request.getMethod()) && PROTECTED_PATH.equals(path));
+        return !PROTECTED.matches(request);
     }
 
     @Override

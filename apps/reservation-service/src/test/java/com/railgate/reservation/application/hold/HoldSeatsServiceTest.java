@@ -77,26 +77,26 @@ class HoldSeatsServiceTest {
 
         @Test
         void 빈_좌석_목록을_거부한다() {
-            assertThatThrownBy(() -> new HoldSeatsCommand(USER, List.of()))
+            assertThatThrownBy(() -> new HoldSeatsCommand(USER, List.of(), CHUSEOK))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
         @Test
         void 중복_좌석을_거부한다() {
-            assertThatThrownBy(() -> new HoldSeatsCommand(USER, seatIds(1, 2, 1)))
+            assertThatThrownBy(() -> new HoldSeatsCommand(USER, seatIds(1, 2, 1), CHUSEOK))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("중복");
         }
 
         @Test
         void 상한을_넘는_좌석_수를_거부한다() {
-            assertThatThrownBy(() -> new HoldSeatsCommand(USER, seatIds(1, 2, 3, 4, 5)))
+            assertThatThrownBy(() -> new HoldSeatsCommand(USER, seatIds(1, 2, 3, 4, 5), CHUSEOK))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
         @Test
         void 검증_실패는_DB_를_건드리지_않는다() {
-            assertThatThrownBy(() -> new HoldSeatsCommand(USER, seatIds(1, 1)))
+            assertThatThrownBy(() -> new HoldSeatsCommand(USER, seatIds(1, 1), CHUSEOK))
                     .isInstanceOf(IllegalArgumentException.class);
 
             assertThat(calls).as("어떤 포트도 호출되지 않는다").isEmpty();
@@ -104,7 +104,7 @@ class HoldSeatsServiceTest {
 
         @Test
         void 정상_요청은_통과한다() {
-            assertThatCode(() -> service.hold(new HoldSeatsCommand(USER, seatIds(3, 1, 2))))
+            assertThatCode(() -> service.hold(new HoldSeatsCommand(USER, seatIds(3, 1, 2), CHUSEOK)))
                     .doesNotThrowAnyException();
         }
     }
@@ -121,7 +121,7 @@ class HoldSeatsServiceTest {
          */
         @Test
         void 회차_해석_다음_quota_확보_다음_좌석_선점() {
-            service.hold(new HoldSeatsCommand(USER, seatIds(1, 2)));
+            service.hold(new HoldSeatsCommand(USER, seatIds(1, 2), CHUSEOK));
 
             assertThat(calls).containsExactly(
                     "scope.resolve",
@@ -135,7 +135,7 @@ class HoldSeatsServiceTest {
         void 해석된_회차를_quota_범위로_쓴다() {
             scope.resolved = new SaleEventId(4242L);
 
-            HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER, seatIds(1)));
+            HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER, seatIds(1), new SaleEventId(4242L)));
 
             assertThat(quota.lastSaleEventId).isEqualTo(new SaleEventId(4242L));
             assertThat(result.saleEventId()).isEqualTo(new SaleEventId(4242L));
@@ -143,7 +143,7 @@ class HoldSeatsServiceTest {
 
         @Test
         void 같은_홀드_식별자를_좌석에_전달하고_결과로_돌려준다() {
-            HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER, seatIds(1, 2)));
+            HoldSeatsResult result = service.hold(new HoldSeatsCommand(USER, seatIds(1, 2), CHUSEOK));
 
             assertThat(seats.lastHoldId).isEqualTo(result.holdId());
             assertThat(seats.lastUserId).isEqualTo(USER);
@@ -153,7 +153,7 @@ class HoldSeatsServiceTest {
         /** ★ 요청 좌석 수만큼 quota 를 확보한다. 1씩 반복하지 않는다. */
         @Test
         void 요청_좌석_수만큼_한_번에_확보한다() {
-            service.hold(new HoldSeatsCommand(USER, seatIds(1, 2, 3, 4)));
+            service.hold(new HoldSeatsCommand(USER, seatIds(1, 2, 3, 4), CHUSEOK));
 
             assertThat(calls).filteredOn(c -> c.startsWith("quota.tryAcquire"))
                     .containsExactly("quota.tryAcquire(4)");
@@ -164,12 +164,32 @@ class HoldSeatsServiceTest {
     @DisplayName("§3 ★ 실패 계약")
     class 실패_계약 {
 
+        /**
+         * ★ D4 — 좌석에서 해석한 회차가 인증된 입장 회차와 다르면 quota·좌석을 건드리기 전에 전용 예외로 거부한다
+         * (HOLD_HTTP_CONTRACT §8.1). 회차를 고르는 데 쓰지 않는다 — 해석 결과가 진실이고 기대값은 검사 대상이다.
+         */
+        @Test
+        void 해석한_회차가_입장_회차와_다르면_quota_와_좌석을_건드리지_않고_거부한다() {
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2), new SaleEventId(9002L))))
+                    .isInstanceOf(AdmissionEventMismatchException.class)
+                    .isNotInstanceOf(QuotaExceededException.class)
+                    .isNotInstanceOf(SeatUnavailableException.class);
+
+            assertThat(calls).containsExactly("scope.resolve");
+        }
+
+        @Test
+        void 기대_회차는_필수다() {
+            assertThatThrownBy(() -> new HoldSeatsCommand(USER, seatIds(1), null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
         /** ★ 상한 초과는 좌석 경합과 <b>구별되는</b> 예외다. */
         @Test
         void 상한_초과는_QuotaExceededException_이다() {
             quota.outcome = QuotaAcquireOutcome.LIMIT_EXCEEDED;
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2), CHUSEOK)))
                     .isInstanceOf(QuotaExceededException.class)
                     .isNotInstanceOf(SeatUnavailableException.class);
         }
@@ -179,7 +199,7 @@ class HoldSeatsServiceTest {
         void 상한_초과면_좌석_선점을_시도하지_않는다() {
             quota.outcome = QuotaAcquireOutcome.LIMIT_EXCEEDED;
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2), CHUSEOK)))
                     .isInstanceOf(QuotaExceededException.class);
 
             assertThat(calls).doesNotContain("seats.holdAll");
@@ -195,7 +215,7 @@ class HoldSeatsServiceTest {
         void 좌석_경합을_그대로_전파한다() {
             seats.failure = new SeatUnavailableException("경합");
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2), CHUSEOK)))
                     .isInstanceOf(SeatUnavailableException.class)
                     .isNotInstanceOf(QuotaExceededException.class)
                     .hasMessage("경합");
@@ -206,7 +226,7 @@ class HoldSeatsServiceTest {
         void 회차_해석_실패를_그대로_전파한다() {
             scope.failure = new SaleEventScopeException("서로 다른 회차");
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1, 2), CHUSEOK)))
                     .isInstanceOf(SaleEventScopeException.class);
 
             assertThat(calls).containsExactly("scope.resolve");
@@ -217,7 +237,7 @@ class HoldSeatsServiceTest {
         void 트랜잭션_배선_실수는_경합과_구별된다() {
             quota.failure = new IllegalStateException("트랜잭션 없음");
 
-            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1))))
+            assertThatThrownBy(() -> service.hold(new HoldSeatsCommand(USER, seatIds(1), CHUSEOK)))
                     .isInstanceOf(IllegalStateException.class)
                     .isNotInstanceOf(QuotaExceededException.class)
                     .isNotInstanceOf(SeatUnavailableException.class);

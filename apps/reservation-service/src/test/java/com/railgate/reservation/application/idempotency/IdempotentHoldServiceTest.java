@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.railgate.reservation.HoldId;
 import com.railgate.reservation.UserId;
+import com.railgate.reservation.application.hold.AdmissionEventMismatchException;
 import com.railgate.reservation.application.hold.HoldSeatsCommand;
 import com.railgate.reservation.application.hold.HoldSeatsResult;
 import com.railgate.reservation.application.hold.QuotaExceededException;
@@ -58,6 +59,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 class IdempotentHoldServiceTest {
 
     private static final UserId USER = new UserId(7L);
+    private static final SaleEventId EVENT = new SaleEventId(9_000_000L);
     private static final IdempotencyKey KEY = new IdempotencyKey("unit-key-0001");
     private static final IdempotencyScope SCOPE = IdempotencyScope.holdSeats(USER, KEY);
     private static final Duration LEASE = Duration.ofSeconds(30);
@@ -97,7 +99,7 @@ class IdempotentHoldServiceTest {
     }
 
     private static HoldSeatsCommand command(UserId user, long... seats) {
-        return new HoldSeatsCommand(user, Arrays.stream(seats).mapToObj(SeatId::new).toList());
+        return new HoldSeatsCommand(user, Arrays.stream(seats).mapToObj(SeatId::new).toList(), EVENT);
     }
 
     private double count(String name, String... tags) {
@@ -482,6 +484,60 @@ class IdempotentHoldServiceTest {
     }
 
     // ------------------------------------------------------------------ 경계·설정·메트릭
+
+    @Nested
+    @DisplayName("§7-1 ★ D4 — TX1 회차 불일치: 업무 실패로 저장하지 않고 리스 포기, 장애 지표와 분리")
+    class D4_회차_불일치 {
+
+        @Test
+        void 결과를_저장하지_않고_리스를_포기한_뒤_같은_예외를_전파한다() {
+            AdmissionEventMismatchException mismatch = new AdmissionEventMismatchException();
+            holdBehavior = command -> {
+                throw mismatch;
+            };
+
+            assertThatThrownBy(() -> service().hold(KEY, command(1, 2))).isSameAs(mismatch);
+
+            assertThat(keys.calls()).containsExactly("tryInsert@1", "abandon:1@3");
+            FakeIdempotencyKeyPort.Row row = keys.row(SCOPE);
+            assertThat(row.state).as("결과 없는 진행 중 행").isEqualTo(IdempotencyKeyState.IN_PROGRESS);
+            assertThat(row.outcome).as("업무 실패로 저장하지 않는다").isNull();
+            assertThat(row.leaseExpired).as("리스를 즉시 만료").isTrue();
+            assertThat(committedHolds.get()).as("TX1 롤백").isZero();
+            assertThat(keys.calls()).noneMatch(c -> c.startsWith("completeRejected"));
+        }
+
+        /** ★ 조정자의 일반 실패(calls{result=failed})에 섞이지 않는다 — 별도 결과 태그로 센다. */
+        @Test
+        void 일반_실패_지표에_섞이지_않는다() {
+            holdBehavior = command -> {
+                throw new AdmissionEventMismatchException();
+            };
+
+            assertThatThrownBy(() -> service().hold(KEY, command(1, 2)))
+                    .isInstanceOf(AdmissionEventMismatchException.class);
+
+            assertThat(count("railgate.idempotency.hold.calls", "result", "failed")).isZero();
+            assertThat(count("railgate.idempotency.hold.calls", "result", "admission_event_mismatch")).isEqualTo(1);
+            assertThat(count("railgate.idempotency.hold.abandons", "outcome", "applied")).isEqualTo(1);
+        }
+
+        /** 같은 키·같은 요청의 재시도는 만료된 리스를 인수해 다시 실행(=다시 대조)한다. */
+        @Test
+        void 같은_키_재시도는_인수해_다시_실행한다() {
+            holdBehavior = command -> {
+                throw new AdmissionEventMismatchException();
+            };
+            assertThatThrownBy(() -> service().hold(KEY, command(1, 2)))
+                    .isInstanceOf(AdmissionEventMismatchException.class);
+
+            holdBehavior = command -> HELD;
+            IdempotentHoldResult result = service().hold(KEY, command(2, 1));
+
+            assertThat(result).isEqualTo(new IdempotentHoldResult.Executed(succeeded()));
+            assertThat(count("railgate.idempotency.hold.takeovers")).isEqualTo(1);
+        }
+    }
 
     @Nested
     @DisplayName("§8 경계·설정·메트릭")

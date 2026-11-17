@@ -15,6 +15,7 @@ import com.railgate.reservation.hold.SeatConfirmationPort;
 import com.railgate.reservation.hold.SeatPaymentOutcome;
 import com.railgate.reservation.hold.SeatPaymentPort;
 import com.railgate.reservation.quota.UserHoldQuotaPort;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.support.MySqlSpringTestSupport;
 import java.sql.Timestamp;
@@ -67,7 +68,7 @@ class StartPaymentServiceIntegrationTest extends MySqlSpringTestSupport {
         for (long id : seatIds) {
             seats.add(new SeatId(id));
         }
-        return holdSeats.hold(new HoldSeatsCommand(user, seats)).holdId();
+        return holdSeats.hold(new HoldSeatsCommand(user, seats, new SaleEventId(FIXTURE_SALE_EVENT_ID))).holdId();
     }
 
     private SeatPaymentOutcome start(long seatId, HoldId hold) {

@@ -70,7 +70,7 @@ class ConfirmSeatServiceIntegrationTest extends MySqlSpringTestSupport {
     }
 
     private HoldId holdViaService(UserId user, List<SeatId> seats) {
-        return holdSeats.hold(new HoldSeatsCommand(user, seats)).holdId();
+        return holdSeats.hold(new HoldSeatsCommand(user, seats, saleEventOf(seats.getFirst().value()))).holdId();
     }
 
     /** 선점 → 결제 시작까지 운영 경로로 준비한다. */
