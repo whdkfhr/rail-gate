@@ -3,7 +3,8 @@
 > 상태: **설계 계약 v0.2** (2026-10-30, Task 2J-B — D1~D4 결정 반영). v0.1 2026-10-25 (Task 2J-A).
 > **구현 상태** — §3 단계 1(액세스 토큰, [TASK-002J-B](experiments/TASK-002J-B-access-token-validation.md))과 **단계 2~3(입장 토큰·
 > 사용자 대조, [TASK-002J-C](experiments/TASK-002J-C-admission-token-validation.md))**, 401/403 고정 본문, `X-Trace-Id`.
-> 단계 4~8(헤더·본문 검증, 회차 해석, 입장 회차 대조, 조정자 연결)·선점 컨트롤러·발급기는 아직 없다 (Task 2J-D).
+> **단계 4~8(헤더·본문 검증, 회차 해석, 입장 회차 대조, 조정자 연결)·운영 선점 컨트롤러·§6 매핑·§7 응답·D4 는 Task 2J-D 에서
+> 구현했다** ([TASK-002J-D](experiments/TASK-002J-D-hold-http.md)). 발급기(D-A1)와 다른 좌석 HTTP API 는 없다.
 >
 > 관련: [REQUIREMENTS.md](REQUIREMENTS.md) FR-2.1·2.3·2.6·2.9·P-13, [IDEMPOTENCY_CONTRACT.md](IDEMPOTENCY_CONTRACT.md),
 > [ADR-009](adr/ADR-009-idempotency-key.md) (C3 채택), [ADR-015](adr/ADR-015-login-and-admission-tokens.md) (인증·입장 토큰),
@@ -24,13 +25,13 @@
 
 | 있음 (코드) | 없음 (이 문서가 설계만 한 것) |
 |---|---|
-| `IdempotentHoldService.hold(IdempotencyKey, HoldSeatsCommand)` → `IdempotentHoldResult` (Task 2I-C) | HTTP 컨트롤러, 요청·응답 DTO, 오류 매핑 |
+| `IdempotentHoldService.hold(IdempotencyKey, HoldSeatsCommand)` → `IdempotentHoldResult` (Task 2I-C) | ~~HTTP 컨트롤러, 요청·응답 DTO, 오류 매핑~~ → `HoldController` (Task 2J-D) |
 | `IdempotencyKey`(ASCII 영숫자·`-`·`_` 8~64자), `HoldSeatsCommand`(1~4석·중복 거부), fingerprint | 로그인 JWT·입장 토큰 검증, 보안 필터, 발급 엔드포인트 |
 | 저장 결과 `StoredHoldOutcome` — 성공(`holdId`·`saleEventId`·`seatCount`) / 업무 실패 코드 3종 | traceId 생성·전파, 응답 직렬화, `Retry-After` |
 | V7 `idempotency_key`, `JdbcIdempotencyKeyRepository` | 보존 기간 삭제 |
 
-`IdempotentHoldService` 의 사용자 id 는 지금 `HoldSeatsCommand` 에서 온다. 이 계약은 그것을 **인증된 주체에서만** 채우도록
-정한다 — 구현 전까지 인증·소유자 검증은 완료가 아니다.
+`IdempotentHoldService` 의 사용자 id 는 `HoldSeatsCommand` 에서 온다. 이 계약은 그것을 **인증된 주체에서만** 채우도록
+정한다 — **Task 2J-D 부터 운영 HTTP 경로는 `AuthenticatedUser` 로만 채운다.** 기대 회차(D4)는 `AdmissionContext` 에서만 온다.
 
 ---
 
@@ -281,7 +282,7 @@ B 는 응답을 저장 결과에서 **매번 다시 만든다.** 그래서 같�
 | ADR-015 D-A1 | 간이 JWT 발급의 신원 확인 방법 | **미결정** | 발급 엔드포인트 |
 | ADR-015 D-A4 | 토큰 수명·시계 오차 수치 | **미결정** — 가정값으로 설정·테스트만 | — |
 
-### 8.1 D4 설계 — TX1 안의 입장 회차 재대조 [확정, 구현은 선점 HTTP 연결 Task]
+### 8.1 D4 설계 — TX1 안의 입장 회차 재대조 [확정, Task 2J-D 구현]
 
 - **기대 회차 전달** — `HoldSeatsCommand` 에 `expectedSaleEventId`(인증된 입장 토큰의 `evt`)를 싣는다. 클라이언트 본문에서
   받지 않는다. `HoldSeatsService` 는 TX1 안에서 좌석으로 해석한 회차가 이 값과 다르면 quota·좌석을 건드리기 전에
@@ -293,6 +294,8 @@ B 는 응답을 저장 결과에서 **매번 다시 만든다.** 그래서 같�
   예외를 전파하고, HTTP 계층이 **403 `ADMISSION_EVENT_MISMATCH`** 로 매핑한다 (5xx·오류율로 세지 않는다). 키 행은 리스가
   만료된 `IN_PROGRESS` 로 남으므로 같은 키·같은 좌석의 재요청은 인수해 다시 대조하고, 다른 좌석이면 fingerprint 불일치 422 다.
 - 조정자 메트릭 `calls{result=failed}` 에 섞이지 않도록 구현 시 별도 분류를 둔다.
+- **구현 (Task 2J-D)** — 기대 회차는 필수 인자(`HoldSeatsCommand(userId, seatIds, expectedSaleEventId)`), 예외는
+  `AdmissionEventMismatchException`, 조정자 메트릭은 `calls{result=admission_event_mismatch}`. 검증 기록은 [TASK-002J-D](experiments/TASK-002J-D-hold-http.md) §3.
 
 ---
 
@@ -352,4 +355,13 @@ B 는 응답을 저장 결과에서 **매번 다시 만든다.** 그래서 같�
 ## 10. 다음 구현 순서
 
 [TASK-002J-A](experiments/TASK-002J-A-hold-http-contract.md) §5 에 작은 단위로 나눴다. 요약: ~~D1~D4 결정~~(완료, 2026-10-30) →
-~~인증 기반(액세스 토큰 검증·traceId)~~(Task 2J-B 완료) → 입장 토큰 검증 → 선점 HTTP 연결(D4 포함) → 간이 발급 엔드포인트.
+~~인증 기반(액세스 토큰 검증·traceId)~~(Task 2J-B 완료) → ~~입장 토큰 검증~~(Task 2J-C) → ~~선점 HTTP 연결(D4 포함)~~(Task 2J-D) → 간이 발급 엔드포인트.
+
+### 10.1 구현에서 정한 것 (Task 2J-D)
+
+- 본문 상한 **4,096 바이트 [제안]** — 넘으면 파싱하지 않고 400 `INVALID_REQUEST`. 400 의 `details` 배열은 넣지 않았다.
+- 사전 조회(§3 단계 6)의 422 본문은 **저장된 422 와 같은 바이트**(`{code, message}`, traceId 는 헤더로만)다.
+- `Content-Type: application/json;charset=UTF-8`. JSON 은 직렬화 라이브러리 없이 직접 쓴다 (§7.3 배포 간 호환).
+- 503 대상에 `CannotCreateTransactionException`(트랜잭션 시작 시 연결 실패)을 넣었다.
+- 응답 메트릭 `railgate.hold.http.responses{status, code, category}`.
+- §4 "앞뒤 공백" 은 HTTP 필드 값의 OWS 라 서버가 넘기기 전에 걷어낼 수 있다 — 파서는 거부하지만 HTTP 로는 확인하지 않았다.

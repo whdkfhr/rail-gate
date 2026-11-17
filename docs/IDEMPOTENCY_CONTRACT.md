@@ -119,6 +119,8 @@ TX2 (REQUIRES_NEW)  업무 실패 기록 또는 리스 포기 (세대·fence 조
   (호출당 3회까지, 대기 없음). 그 밖의 DB 장애와 TX1·TX2·리스 포기는 재시도하지 않는다 — PR #32, [TASK-002J-B](experiments/TASK-002J-B-access-token-validation.md) §7.
 - 성공 결과를 TX1 에 기록하는 이 경계는 **ADR-009 C1 채택으로 CLAUDE.md 규칙 16 에 반영됐다** (2026-10-12).
 - TX2 의 업무 실패 기록은 **TX1 롤백이 확인된 경우에만** 한다. 커밋 결과가 불명이면 결과를 쓰지 않고 리스만 포기한다.
+- **TX1 안의 입장 회차 불일치(D4, Task 2J-D)** 는 업무 실패가 아니다. 결과를 쓰지 않고 같은 조건부 포기로 리스만 만료시킨 뒤 전파한다 —
+  키 행은 결과 없는 `IN_PROGRESS` 로 남고 같은 키·같은 요청이 인수한다 ([HOLD_HTTP_CONTRACT](HOLD_HTTP_CONTRACT.md) §8.1).
 
 ---
 

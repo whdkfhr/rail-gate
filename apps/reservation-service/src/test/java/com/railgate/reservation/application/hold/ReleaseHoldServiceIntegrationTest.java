@@ -58,7 +58,7 @@ class ReleaseHoldServiceIntegrationTest extends MySqlSpringTestSupport {
 
     /** 운영 선점 경로로 홀드를 만든다. quota 도 함께 오른다. */
     private HoldId holdViaService(UserId user, List<SeatId> seats) {
-        return holdSeats.hold(new HoldSeatsCommand(user, seats)).holdId();
+        return holdSeats.hold(new HoldSeatsCommand(user, seats, saleEventOf(seats.getFirst().value()))).holdId();
     }
 
     private ReleaseHoldResult release(HoldId hold, UserId user) {

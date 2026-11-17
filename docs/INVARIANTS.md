@@ -56,10 +56,10 @@
 
 ### I-6. 입장 토큰은 특정 `(userId, eventId)` 에 바인딩되며 양도할 수 없다
 
-> **현재 상태 — 사용자 바인딩만 강제된다 (Task 2J-C).** `POST /api/reservations/holds` 에서 입장 토큰의 `sub` 를 로그인
-> 액세스 토큰의 사용자와 대조해 다르면 403 `ADMISSION_USER_MISMATCH` 다 ([TASK-002J-C](experiments/TASK-002J-C-admission-token-validation.md)).
-> **`evt` 와 요청 좌석의 판매 회차 대조는 아직 없다** (Task 2J-D). 그 전까지 회차 E1 의 입장 토큰으로 회차 E2 좌석을 노리는 요청은
-> 막히지 않는다 — 다만 선점 컨트롤러도 아직 없다.
+> **현재 상태 — 선점 경로에서 사용자·회차 바인딩이 강제된다 (Task 2J-C·2J-D).** `POST /api/reservations/holds` 에서 입장 토큰의
+> `sub` 를 로그인 사용자와 대조하고(403 `ADMISSION_USER_MISMATCH`, [TASK-002J-C](experiments/TASK-002J-C-admission-token-validation.md)),
+> `evt` 를 요청 좌석의 판매 회차와 사전에 한 번, TX1 안에서 한 번 더 대조한다(403 `ADMISSION_EVENT_MISMATCH`, D4,
+> [TASK-002J-D](experiments/TASK-002J-D-hold-http.md)). 재생 요청도 사전 대조를 거친다. **다른 좌석 HTTP API 는 아직 없다.**
 
 - **보장 메커니즘** — JWT(HS256)의 `sub`, `evt` 클레임을 요청 주체·대상과 대조. 서명 검증만으로는 부족하다.
 - **깨지는 조건** — 서명만 확인하고 `sub` 를 대조하지 않으면, 유출된 토큰을 아무나 쓸 수 있다.
@@ -67,10 +67,10 @@
 
 ### I-7. 입장 권한이 없는 사용자는 좌석 예매 API를 사용할 수 없다
 
-> **현재 상태 — 선점 경로의 필터만 있다 (Task 2J-C).** 로그인 액세스 토큰(Task 2J-B)에 더해 `POST /api/reservations/holds` 는
-> 유효한 입장 토큰이 없으면 401 `ADMISSION_TOKEN_INVALID` 다. 검증은 `modules/queue-token` 이 **네트워크 없이** 서명만으로 한다.
-> **아직 아닌 것**: 그 경로의 운영 컨트롤러(Task 2J-D), 회차 대조(Task 2J-D), 다른 좌석 API(없음), 토큰 발급(대기열, Phase 2),
-> 즉시 폐기(blocklist). 그래서 "입장 권한 없이는 좌석 예매 API 를 쓸 수 없다" 는 아직 완료가 아니다.
+> **현재 상태 — 선점 API 하나에서 강제된다 (Task 2J-C·2J-D).** 운영 `POST /api/reservations/holds` 는 로그인 액세스 토큰(Task 2J-B)과
+> 유효한 입장 토큰이 없으면 401, 회차가 다르면 403 이다. 검증은 `modules/queue-token` 이 **네트워크 없이** 서명만으로 한다.
+> **아직 아닌 것**: 다른 좌석 API(없음 — 생기면 같은 검증을 붙여야 한다), 토큰 발급(대기열, Phase 2), 즉시 폐기(blocklist).
+> 그래서 "입장 권한 없이는 좌석 예매 API 를 쓸 수 없다" 는 **존재하는 유일한 좌석 API 에 대해서만** 성립한다.
 
 - **보장 메커니즘** — `reservation-service` 의 필터에서 토큰 검증. **queue-service 로의 네트워크 호출 없이** 서명만으로 판정한다.
 - **깨지는 조건** — 검증 실패 시 통과시키는 fail-open 정책. Redis 장애 시 전원 입장 → MySQL 붕괴.
@@ -236,8 +236,9 @@
 > 운영 테이블(V7 `idempotency_key`)과 JDBC 저장소(`JdbcIdempotencyKeyRepository`)
 > ([TASK-002I-B](experiments/TASK-002I-B-idempotency-store.md)), 그리고 TX0/TX1/TX2 조정자 `IdempotentHoldService` 와
 > 그 빈 배선([TASK-002I-C](experiments/TASK-002I-C-idempotent-hold-service.md))이 있다.
-> **REST·`Idempotency-Key` 헤더가 없으므로 I-18 은 HTTP 요청 경로에서 아직 강제되지 않는다.** (액세스 토큰 검증은 Task 2J-B 에서 생겼으나 선점 컨트롤러가 없다.) 아래 메커니즘은
-> 조정자가 불려졌을 때의 보장이다. 사용자 id 는 아직 명령에서 오며 인증된 주체와 대조하지 않는다.
+> **Task 2J-D 부터 선점 HTTP 경로(`POST /api/reservations/holds`)에서 `Idempotency-Key` 가 필수이고 조정자를 거친다.** 사용자 id 는
+> 인증된 주체에서만 온다. 재생 응답은 상태·본문 바이트·`Location`·`Content-Type` 이 같다(D1, 실제 HTTP 테스트로 바이트 비교 —
+> [TASK-002J-D](experiments/TASK-002J-D-hold-http.md)). 다른 상태 변경 POST 는 아직 없다. 리스·보존 수치(C4)는 미결정이다.
 
 - **보장 메커니즘** — 4단계.
   1. `idempotency_key` 테이블 PK `(사용자, 연산, 클라이언트 키)` 로 중복 감지

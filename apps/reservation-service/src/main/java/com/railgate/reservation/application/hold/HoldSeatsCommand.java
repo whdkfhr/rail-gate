@@ -2,6 +2,7 @@ package com.railgate.reservation.application.hold;
 
 import com.railgate.reservation.UserId;
 import com.railgate.reservation.hold.SeatCount;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import java.util.List;
 import java.util.Objects;
@@ -22,12 +23,19 @@ import java.util.Set;
  * <p>여기서 거부되는 요청은 <b>DB 를 한 번도 건드리지 않는다.</b> 서비스 안으로 들어간 뒤
  * 검증하면 트랜잭션이 이미 열려 있고, 잘못된 입력 때문에 커넥션을 점유한다.
  * 만들 수 없는 명령은 만들어지지 않게 한다.
+ *
+ * <h2>★ 기대 회차는 권한이지 요청이 아니다 (D4, HOLD_HTTP_CONTRACT §8.1)</h2>
+ *
+ * <p>{@code expectedSaleEventId} 는 <b>인증된 입장 토큰의 {@code evt}</b> 다. 클라이언트 본문에서 받지 않는다. 선점 서비스는 좌석에서
+ * 해석한 회차가 이 값과 다르면 quota·좌석을 건드리기 전에 거부한다 — 회차를 고르는 데 쓰지 않는다. 필수다. 입장 권한 없이
+ * 선점하는 경로를 두지 않는다. fingerprint({@code hold-seats/v1})에는 넣지 않는다 — 요청 본문의 의미가 아니라 권한이다.
  */
-public record HoldSeatsCommand(UserId userId, List<SeatId> seatIds) {
+public record HoldSeatsCommand(UserId userId, List<SeatId> seatIds, SaleEventId expectedSaleEventId) {
 
     public HoldSeatsCommand {
         Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(seatIds, "seatIds");
+        Objects.requireNonNull(expectedSaleEventId, "expectedSaleEventId");
 
         if (seatIds.isEmpty()) {
             throw new IllegalArgumentException("선점할 좌석이 없다");

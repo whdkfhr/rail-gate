@@ -18,6 +18,7 @@ import com.railgate.reservation.application.hold.idempotency.Task2iaFaultPoints.
 import com.railgate.reservation.infra.quota.JdbcUserHoldQuotaRepository;
 import com.railgate.reservation.infra.saleevent.JdbcSaleEventScopeRepository;
 import com.railgate.reservation.infra.seat.JdbcMultiSeatHoldRepository;
+import com.railgate.reservation.saleevent.SaleEventId;
 import com.railgate.reservation.seat.SeatId;
 import com.railgate.reservation.support.MySqlSpringTestSupport;
 import com.zaxxer.hikari.HikariDataSource;
@@ -166,7 +167,7 @@ class HoldIdempotencyFailureWindowTest extends MySqlSpringTestSupport {
     }
 
     private static HoldSeatsCommand command(UserId user, long... seats) {
-        return new HoldSeatsCommand(user, Arrays.stream(seats).mapToObj(SeatId::new).toList());
+        return new HoldSeatsCommand(user, Arrays.stream(seats).mapToObj(SeatId::new).toList(), new SaleEventId(FIXTURE_SALE_EVENT_ID));
     }
 
     /** 리스를 DB 시각 기준 과거로 옮긴다. 시간을 기다리지 않고 "리스 만료" 를 만든다. */

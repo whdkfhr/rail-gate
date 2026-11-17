@@ -35,9 +35,10 @@ class IdempotencyContractTest {
 
     private static final UserId USER_A = new UserId(1L);
     private static final UserId USER_B = new UserId(2L);
+    private static final SaleEventId EVENT = new SaleEventId(9_000_000L);
 
     private static HoldSeatsCommand command(UserId user, long... seats) {
-        return new HoldSeatsCommand(user, Arrays.stream(seats).mapToObj(SeatId::new).toList());
+        return new HoldSeatsCommand(user, Arrays.stream(seats).mapToObj(SeatId::new).toList(), EVENT);
     }
 
     @Nested

@@ -1,5 +1,6 @@
 package com.railgate.reservation.application.idempotency;
 
+import com.railgate.reservation.application.hold.AdmissionEventMismatchException;
 import com.railgate.reservation.application.hold.HoldSeatsCommand;
 import com.railgate.reservation.application.hold.HoldSeatsResult;
 import com.railgate.reservation.application.hold.HoldSeatsService;
@@ -37,6 +38,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *                       └ NOT_OWNER 면 TX1 전체(좌석·quota) 롤백 → 소유권 상실
  *   TX2 (REQUIRES_NEW)  TX1 롤백이 확인된 업무 실패만 기록 (세대·fence 조건)
  *   장애                결과를 저장하지 않고 조건부 리스 포기(REQUIRES_NEW) 후 원래 예외 전파
+ *   D4 회차 불일치      장애와 같이 저장하지 않고 리스 포기 후 전파. 메트릭은 calls{result=admission_event_mismatch}
  * </pre>
  *
  * <h2>무엇을 보장하는가</h2>
@@ -53,10 +55,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <h2>무엇을 하지 않는가</h2>
  *
  * <ul>
- *   <li><b>인증</b> — 사용자는 {@link HoldSeatsCommand#userId()} 에서 온다. 인증된 주체와의 대조가 없으므로
- *       남의 사용자 id 로 키 범위를 쓸 수 있다는 한계가 남는다</li>
- *   <li>HTTP 응답·상태 코드(매핑은 ADR-009 C3 채택 — {@code docs/HOLD_HTTP_CONTRACT.md}), 응답 직렬화, 보존 기간 삭제,
- *       다른 유스케이스</li>
+ *   <li><b>인증</b> — 사용자는 {@link HoldSeatsCommand#userId()} 에서 온다. 운영 HTTP 경로({@code HoldController})는 인증된
+ *       주체로만 채운다 (Task 2J-D). 이 클래스 자체는 그것을 검사하지 않는다</li>
+ *   <li>HTTP 응답·상태 코드·직렬화({@code HoldHttpResponses}), 보존 기간 삭제, 다른 유스케이스</li>
  * </ul>
  *
  * <h2>잠금 순서와 커넥션</h2>
@@ -207,6 +208,10 @@ public class IdempotentHoldService {
                 case Acquired.Answered answered -> answered.result();
                 case Acquired.Owned owned -> execute(scope, owned.ownership(), command);
             };
+        } catch (AdmissionEventMismatchException mismatch) {
+            // D4 — 리스는 이미 포기했다. 권한 거절이지 장애가 아니므로 failed 에 섞지 않는다.
+            count(CALLS, "result", "admission_event_mismatch");
+            throw mismatch;
         } catch (RuntimeException failure) {
             count(CALLS, "result", "failed");
             throw failure;
@@ -321,6 +326,10 @@ public class IdempotentHoldService {
             count(NOT_OWNER, "write", "succeeded");
             log.warn("멱등 선점의 성공 기록이 거절돼 본 작업을 롤백했다 — 리스를 빼앗긴 시도");
             return new IdempotentHoldResult.OwnershipLost();
+        } catch (AdmissionEventMismatchException mismatch) {
+            // ★ D4 — TX1 은 quota·좌석 변경 전에 롤백됐다. 업무 실패가 아니므로 결과를 저장하지 않고, 세대·fence·IN_PROGRESS
+            // 조건으로 리스만 포기한다. 같은 키·같은 요청은 인수해 다시 대조한다 (HOLD_HTTP_CONTRACT §8.1).
+            throw afterAbandoning(scope, mine, mismatch);
         } catch (RuntimeException failure) {
             Optional<Rejected> rejected = HoldRejectionClassifier.classify(failure);
             if (rejected.isEmpty()) {

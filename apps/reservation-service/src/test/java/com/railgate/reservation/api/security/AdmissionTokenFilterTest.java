@@ -7,7 +7,6 @@ import com.railgate.reservation.support.MutableClock;
 import com.railgate.reservation.support.SecuredWebTestSupport;
 import com.railgate.reservation.support.TestAccessTokens;
 import com.railgate.testprobe.AuthProbeController;
-import com.railgate.testprobe.HoldProbeController;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
@@ -50,6 +49,7 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
     private static final long OTHER_USER = 4343L;
     private static final long SCHEDULE = 8_800L;
     private static final String INVALID_MESSAGE = "입장 권한을 확인할 수 없습니다.";
+    private static final String HOLDS = "/api/reservations/holds";
 
     @LocalServerPort
     private int port;
@@ -57,8 +57,6 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
     @Autowired
     private MutableClock clock;
 
-    @Autowired
-    private HoldProbeController probe;
 
     @Autowired
     private ApplicationContext context;
@@ -88,9 +86,9 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
     }
 
     private HttpResponse<String> post(String bearer, String... admissionHeaders) throws IOException, InterruptedException {
-        HttpRequest.Builder request = HttpRequest.newBuilder(
-                        URI.create("http://localhost:" + port + HoldProbeController.PATH + "?seatId=" + seat))
-                .POST(HttpRequest.BodyPublishers.noBody())
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + HOLDS))
+                .POST(HttpRequest.BodyPublishers.ofString("{\"seatIds\":[" + seat + "]}"))
+                .header("Content-Type", "application/json")
                 .header("Idempotency-Key", "adm-key-" + (keySeq++) + "-xx");
         if (bearer != null) {
             request.header("Authorization", "Bearer " + bearer);
@@ -117,9 +115,21 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
         return jdbc().queryForObject(sql, Long.class);
     }
 
-    /** 거부된 요청은 확인용 컨트롤러(=조정자)에 닿지 않고 키·좌석·quota 를 바꾸지 않는다. */
+    /** 멱등 조정자의 호출 수 — 결과와 무관하게 호출마다 하나씩 센다 ({@code railgate.idempotency.hold.calls}). */
+    private int coordinatorCalls() {
+        return (int) meters.find("railgate.idempotency.hold.calls").counters().stream()
+                .mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
+    }
+
+    /** 운영 선점 컨트롤러가 응답한 수 — 컨트롤러에 들어가면 결과와 무관하게 하나씩 센다 ({@code railgate.hold.http.responses}). */
+    private int controllerResponses() {
+        return (int) meters.find("railgate.hold.http.responses").counters().stream()
+                .mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
+    }
+
+    /** 거부된 요청은 운영 선점 컨트롤러에 들어가지 않고(조정자도 부르지 않고) 키·좌석·quota 를 바꾸지 않는다. */
     private void assertNothingChanged(int invocationsBefore) {
-        assertThat(probe.invocations()).as("조정자 미호출").isEqualTo(invocationsBefore);
+        assertThat(controllerResponses() + coordinatorCalls()).as("컨트롤러·조정자 미진입").isEqualTo(invocationsBefore);
         assertThat(count("SELECT COUNT(*) FROM idempotency_key")).as("멱등키 불변").isZero();
         assertThat(statusOf(seat)).as("좌석 불변").isEqualTo("AVAILABLE");
         assertThat(quotaRowCount()).as("quota 불변").isZero();
@@ -154,18 +164,19 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
         void 두_토큰이_유효하고_사용자가_같으면_통과해_조정자에_닿는다() throws Exception {
             HttpResponse<String> response = post(access(), admission());
 
-            assertThat(response.statusCode()).isEqualTo(200);
+            assertThat(response.statusCode()).isEqualTo(201);
             Map<String, Object> body = json(response);
-            assertThat(((Number) body.get("principalUserId")).longValue()).as("로그인 principal 그대로").isEqualTo(USER);
-            assertThat(((Number) body.get("admissionUserId")).longValue()).isEqualTo(USER);
-            assertThat(((Number) body.get("admissionSaleEventId")).longValue()).isEqualTo(FIXTURE_SALE_EVENT_ID);
-            assertThat(body.get("result")).isEqualTo("Executed");
+            assertThat(((Number) body.get("saleEventId")).longValue()).as("입장 회차 = 좌석 회차").isEqualTo(FIXTURE_SALE_EVENT_ID);
             assertThat(statusOf(seat)).as("통과하면 실제로 선점된다 — 거부 테스트의 대조군").isEqualTo("HELD");
+            assertThat(heldByOf(seat)).as("선점 주체는 로그인 principal").isEqualTo(USER);
         }
 
         @Test
         void 입장이_필요_없는_API_와_health_는_입장_토큰을_요구하지_않는다() throws Exception {
             assertThat(get(AuthProbeController.PATH, access()).statusCode()).isEqualTo(200);
+            HttpResponse<String> getHolds = get(HOLDS, access());
+            assertThat(getHolds.statusCode()).as("GET 은 선점 경로가 아니다 — 입장 필터 대상 아님, 매핑 없음").isEqualTo(405);
+            assertThat(getHolds.body()).doesNotContain("ADMISSION_TOKEN_INVALID");
             assertThat(get("/actuator/health", null).statusCode()).isEqualTo(200);
         }
     }
@@ -178,14 +189,14 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
 
         @Test
         void 없으면_401() throws Exception {
-            int before = probe.invocations();
+            int before = controllerResponses() + coordinatorCalls();
             assertAdmissionInvalid(post(access()));
             assertNothingChanged(before);
         }
 
         @Test
         void 두_번_오면_401() throws Exception {
-            int before = probe.invocations();
+            int before = controllerResponses() + coordinatorCalls();
             assertAdmissionInvalid(post(access(), admission(), admission()));
             assertNothingChanged(before);
         }
@@ -200,6 +211,31 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
         void 비어_있거나_공백이면_401() throws Exception {
             assertAdmissionInvalid(post(access(), ""));
             assertAdmissionInvalid(post(access(), " "));
+        }
+    }
+
+    // ------------------------------------------------------------------ §2-1 경로 표기
+
+    @Nested
+    @DisplayName("§2-1 ★ 인코딩한 경로도 같은 선점 경로다 — 입장 필터를 건너뛰지 않는다")
+    class 경로_표기 {
+
+        /**
+         * MVC 는 디코딩한 경로로 컨트롤러를 고른다. 입장 필터가 원문 URI 로만 비교하면 {@code %68olds} 는 필터를 건너뛰고 컨트롤러에
+         * 닿는다(컨트롤러는 입장 정보가 없어 500 으로 막는다). 필터도 같은 기준으로 판정해 401 이어야 한다.
+         */
+        @Test
+        void 퍼센트_인코딩한_경로도_입장_토큰을_요구한다() throws Exception {
+            int before = controllerResponses() + coordinatorCalls();
+            HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/reservations/%68olds"))
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"seatIds\":[" + seat + "]}"))
+                    .header("Content-Type", "application/json")
+                    .header("Idempotency-Key", "adm-key-encoded-x")
+                    .header("Authorization", "Bearer " + access())
+                    .build();
+
+            assertAdmissionInvalid(http.send(request, HttpResponse.BodyHandlers.ofString()));
+            assertNothingChanged(before);
         }
     }
 
@@ -220,7 +256,7 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
 
         @Test
         void alg_none_과_HS256_이_아닌_알고리즘은_401() throws Exception {
-            int before = probe.invocations();
+            int before = controllerResponses() + coordinatorCalls();
             assertAdmissionInvalid(post(access(), TestAccessTokens.unsigned(NOW, USER)));
             assertAdmissionInvalid(post(access(), TestAccessTokens.admission(NOW, USER, FIXTURE_SALE_EVENT_ID,
                     s -> s.algorithm = "HS512")));
@@ -256,7 +292,7 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
 
         @Test
         void 필수_claim_누락과_잘못된_타입은_401() throws Exception {
-            int before = probe.invocations();
+            int before = controllerResponses() + coordinatorCalls();
             for (String claim : List.of("sub", "evt", "iat", "exp", "jti")) {
                 assertAdmissionInvalid(post(access(), TestAccessTokens.admission(NOW, USER, FIXTURE_SALE_EVENT_ID,
                         s -> s.without(claim))));
@@ -305,7 +341,7 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
         @ValueSource(strings = {"iat", "exp", "nbf"})
         void long_극단값_시각_claim_은_401_ADMISSION_TOKEN_INVALID(String claim) throws Exception {
             for (long value : new long[] {Long.MAX_VALUE, Long.MIN_VALUE}) {
-                int before = probe.invocations();
+                int before = controllerResponses() + coordinatorCalls();
                 double claimsRejections = meters.counter("railgate.auth.admission", "outcome", "rejected", "reason", "claims").count();
                 String accessToken = access();
                 String token = outOfRange(claim, value);
@@ -328,7 +364,7 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
 
         @Test
         void 사용자가_다르면_403() throws Exception {
-            int before = probe.invocations();
+            int before = controllerResponses() + coordinatorCalls();
             HttpResponse<String> response = post(access(), TestAccessTokens.admission(NOW, OTHER_USER, FIXTURE_SALE_EVENT_ID));
 
             assertThat(response.statusCode()).isEqualTo(403);
@@ -341,7 +377,7 @@ class AdmissionTokenFilterTest extends SecuredWebTestSupport {
         /** ★ 액세스 오류가 입장 오류보다 먼저다 — 로그인 검증을 통과하지 못하면 입장 토큰은 보지 않는다. */
         @Test
         void 액세스_토큰이_없거나_틀리면_입장_토큰과_무관하게_AUTHENTICATION_REQUIRED() throws Exception {
-            int before = probe.invocations();
+            int before = controllerResponses() + coordinatorCalls();
             assertAuthenticationRequired(post(null, admission()));
             assertAuthenticationRequired(post(null));
             assertAuthenticationRequired(post(TestAccessTokens.tampered(access()), "garbage"));
