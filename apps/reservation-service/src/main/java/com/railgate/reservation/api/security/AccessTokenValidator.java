@@ -25,6 +25,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
  *       마친 토큰의 페이로드를 같은 라이브러리로 다시 읽어 원래 타입을 본다 (직접 파싱하지 않는다)</li>
  *   <li>{@code iat}·{@code exp} 필수. {@code iat ≤ now + skew}, {@code iat < exp}, {@code exp − iat ≤ maxLifetime},
  *       {@code now ≤ exp + skew}. {@code nbf} 가 있으면 {@code nbf ≤ now + skew}</li>
+ *   <li>{@code nbf} 는 선택이지만 <b>있으면 원래 JSON 값</b>이 정수 숫자(초)이고 {@link Instant} 범위 안이어야 한다. 잘못된 값을
+ *       없음으로 취급하지 않는다 — 라이브러리 변환이 범위 밖 값을 넘침으로 다른 시각으로 바꾸거나 소수를 잘라 받아들이기 때문이다</li>
  * </ul>
  *
  * <p>시각은 주입한 {@link Clock} 으로 판단한다. 토큰은 DB 를 거치지 않고 검증해야 하므로 규칙 7(DB {@code NOW(3)})의
@@ -69,7 +71,7 @@ public final class AccessTokenValidator implements OAuth2TokenValidator<Jwt> {
                 && ACCESS.equals(raw.get(TOKEN_USE))
                 && isUserId(raw.get("sub"))
                 && isNonBlankString(raw.get("jti"))
-                && hasValidTimes(jwt);
+                && hasValidTimes(jwt, raw);
     }
 
     /** 서명 검증을 마친 토큰의 원래 claim. 다시 읽지 못하면 {@code null} — 거부한다. */
@@ -100,19 +102,46 @@ public final class AccessTokenValidator implements OAuth2TokenValidator<Jwt> {
         return value instanceof String text && !text.isBlank();
     }
 
-    private boolean hasValidTimes(Jwt jwt) {
+    private boolean hasValidTimes(Jwt jwt, Map<String, Object> raw) {
         Instant iat = jwt.getIssuedAt();
         Instant exp = jwt.getExpiresAt();
         if (iat == null || exp == null) {
             return false;
         }
+        // nbf 는 선택이지만 "없음"과 "잘못된 값"은 다르다. 라이브러리 변환은 범위 밖 값을 다른 시각으로 바꾸거나(초×1000 넘침)
+        // 소수를 잘라 받아들이므로 원래 JSON 값으로 판정한다.
+        Instant nbf = null;
+        if (raw.containsKey("nbf")) {
+            nbf = epochSeconds(raw.get("nbf"));
+            if (nbf == null) {
+                return false;
+            }
+        }
         Instant now = clock.instant();
-        Instant nbf = jwt.getNotBefore();
         return !iat.isAfter(now.plus(clockSkew))
                 && iat.isBefore(exp)
                 && !Duration.between(iat, exp).minus(maxLifetime).isPositive()
                 && !now.isAfter(exp.plus(clockSkew))
                 && (nbf == null || !nbf.isAfter(now.plus(clockSkew)));
+    }
+
+    /**
+     * 정수 JSON 숫자(초)이고 {@link Instant} 표현 범위 안이면 그 시각, 아니면 {@code null}. 문자열·소수·그 밖의 타입은 받지 않는다.
+     * 범위는 변환 전에 비교한다 — 예외를 잡지 않는다.
+     */
+    static Instant epochSeconds(Object value) {
+        long seconds;
+        if (value instanceof Long l) {
+            seconds = l;
+        } else if (value instanceof Integer i) {
+            seconds = i;
+        } else {
+            return null;
+        }
+        if (seconds < Instant.MIN.getEpochSecond() || seconds > Instant.MAX.getEpochSecond()) {
+            return null;
+        }
+        return Instant.ofEpochSecond(seconds);
     }
 
     private static String requireText(String value, String name) {
