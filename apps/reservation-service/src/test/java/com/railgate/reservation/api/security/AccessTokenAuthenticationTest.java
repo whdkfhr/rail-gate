@@ -22,6 +22,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -420,6 +421,137 @@ class AccessTokenAuthenticationTest extends SecuredWebTestSupport {
                 assertThat(payload(token)).contains("\"" + claim + "\":" + value);
                 assertUnauthorized(probe(token), token);
             }
+        }
+    }
+
+    // ------------------------------------------------------------------ §5-2 iat·exp 의 원래 값
+
+    @Nested
+    @DisplayName("§5-2 ★ iat·exp 는 원래 JSON 의 정수 초로 판정한다 (필수)")
+    class 시각_원래_값 {
+
+        private static final long MAX_EPOCH = Instant.MAX.getEpochSecond();
+        private static final long MIN_EPOCH = Instant.MIN.getEpochSecond();
+        private static final BigInteger TWO_64 = BigInteger.ONE.shiftLeft(64);
+
+        /** 정상 액세스 토큰의 claim 을 JSON 조각으로 들고, 바꾸거나 지운 뒤 원문 그대로 서명한다. */
+        private String raw(Map<String, String> overrides, String... removed) {
+            Map<String, String> claims = new java.util.LinkedHashMap<>();
+            claims.put("iss", "\"railgate-auth\"");
+            claims.put("aud", "[\"railgate-api\"]");
+            claims.put("sub", "\"" + USER + "\"");
+            claims.put("iat", Long.toString(NOW.getEpochSecond()));
+            claims.put("exp", Long.toString(NOW.plusSeconds(600).getEpochSecond()));
+            claims.put("jti", "\"" + java.util.UUID.randomUUID() + "\"");
+            claims.put("token_use", "\"access\"");
+            claims.putAll(overrides);
+            for (String name : removed) {
+                claims.remove(name);
+            }
+            String json = claims.entrySet().stream().map(e -> "\"" + e.getKey() + "\":" + e.getValue())
+                    .collect(Collectors.joining(",", "{", "}"));
+            String token = TestAccessTokens.signedRaw(json);
+            assertThat(TestAccessTokens.payloadJson(token)).as("서명 전후 페이로드 원문이 같다").isEqualTo(json);
+            return token;
+        }
+
+        private void assertRejected(String token) throws Exception {
+            assertUnauthorized(probe(token), token);
+        }
+
+        /**
+         * 라이브러리는 초를 {@code 초 × 1000} 밀리초로 바꾸며 넘친다. {@code target} 밀리초로 감기는 초 값 —
+         * 원래 값은 약 {@code 1.8×10^16} 초(Instant 범위 안의 먼 미래)다.
+         */
+        private static long wrapsTo(Instant target) {
+            long targetMillis = target.toEpochMilli();
+            long remainder = TWO_64.add(BigInteger.valueOf(targetMillis)).mod(BigInteger.valueOf(1000)).longValue();
+            BigInteger millis = TWO_64.add(BigInteger.valueOf(targetMillis - remainder));
+            long seconds = millis.divide(BigInteger.valueOf(1000)).longValueExact();
+            assertThat(seconds).isGreaterThan(Long.MAX_VALUE / 1000).isLessThanOrEqualTo(MAX_EPOCH);
+            assertThat(seconds * 1000).as("곱셈이 넘쳐 target 근처로 감긴다")
+                    .isBetween(targetMillis - 1000, targetMillis);
+            return seconds;
+        }
+
+        @Test
+        void 정상_원문_토큰은_통과한다() throws Exception {
+            assertThat(probe(raw(Map.of())).statusCode()).isEqualTo(200);
+        }
+
+        /** ★ RED 대상 — 먼 미래의 exp 가 넘침으로 "10분 뒤" 로 바뀌어 최대 수명 검사를 통과했다. */
+        @Test
+        void 넘침으로_가까운_시각이_되는_exp_는_401() throws Exception {
+            long exp = wrapsTo(NOW.plusSeconds(600));
+            assertRejected(raw(Map.of("exp", Long.toString(exp))));
+        }
+
+        /** ★ RED 대상 — 먼 미래의 iat 가 넘침으로 "지금" 으로 바뀌어 미래 발급 검사를 통과했다. */
+        @Test
+        void 넘침으로_가까운_시각이_되는_iat_는_401() throws Exception {
+            long iat = wrapsTo(NOW);
+            assertRejected(raw(Map.of("iat", Long.toString(iat))));
+        }
+
+        /** ★ RED 대상 — 소수 초는 잘려 정수로 받아들여졌다. */
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp"})
+        void 소수_초는_401(String claim) throws Exception {
+            long base = claim.equals("iat") ? NOW.getEpochSecond() : NOW.plusSeconds(600).getEpochSecond();
+            assertRejected(raw(Map.of(claim, base + ".5")));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp"})
+        void 없으면_401(String claim) throws Exception {
+            assertRejected(raw(Map.of(), claim));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp"})
+        void 정수_숫자가_아닌_타입은_401(String claim) throws Exception {
+            long base = claim.equals("iat") ? NOW.getEpochSecond() : NOW.plusSeconds(600).getEpochSecond();
+            for (String value : new String[] {"null", "\"" + base + "\"", "\"" + Instant.ofEpochSecond(base) + "\"",
+                    "true", "[" + base + "]", "{\"v\":" + base + "}"}) {
+                assertRejected(raw(Map.of(claim, value)));
+            }
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp"})
+        void 시각_표현_범위_밖은_401(String claim) throws Exception {
+            for (String value : new String[] {Long.toString(MAX_EPOCH + 1), Long.toString(MIN_EPOCH - 1),
+                    Long.toString(Long.MAX_VALUE), Long.toString(Long.MIN_VALUE),
+                    "9223372036854775808", "-9223372036854775809"}) {
+                assertRejected(raw(Map.of(claim, value)));
+            }
+        }
+
+        /** 기존 경계 유지 — 발급 now+30초 허용·+31초 거부, 수명 30분 허용·+1초 거부, exp ≤ iat 거부, 만료 +30초 허용·+31초 거부. */
+        @Test
+        void 기존_시각_경계는_그대로다() throws Exception {
+            long now = NOW.getEpochSecond();
+            assertThat(probe(raw(Map.of("iat", Long.toString(now + 30)))).statusCode()).isEqualTo(200);
+            assertRejected(raw(Map.of("iat", Long.toString(now + 31))));
+            assertThat(probe(raw(Map.of("exp", Long.toString(now + 1800)))).statusCode()).isEqualTo(200);
+            assertRejected(raw(Map.of("exp", Long.toString(now + 1801))));
+            assertRejected(raw(Map.of("exp", Long.toString(now))));
+            String exp60 = raw(Map.of("exp", Long.toString(now + 60)));
+            clock.set(NOW.plusSeconds(90));
+            assertThat(probe(exp60).statusCode()).isEqualTo(200);
+            clock.set(NOW.plusSeconds(91));
+            assertRejected(exp60);
+        }
+
+        /** nbf — 없으면 통과, 명시적 null 은 거부 (원문에 null 이 남아 있다). */
+        @Test
+        void nbf_누락은_허용하고_명시적_null_은_401() throws Exception {
+            String absent = raw(Map.of());
+            assertThat(TestAccessTokens.payloadJson(absent)).doesNotContain("nbf");
+            assertThat(probe(absent).statusCode()).isEqualTo(200);
+            String explicitNull = raw(Map.of("nbf", "null"));
+            assertThat(TestAccessTokens.payloadJson(explicitNull)).contains("\"nbf\":null");
+            assertRejected(explicitNull);
         }
     }
 

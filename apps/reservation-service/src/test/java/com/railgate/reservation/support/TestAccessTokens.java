@@ -4,6 +4,8 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSObject;
+import com.nimbusds.jose.Payload;
 import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.RSAKey;
@@ -101,6 +103,27 @@ public final class TestAccessTokens {
         String header = b64("{\"alg\":\"none\",\"typ\":\"at+jwt\"}");
         String payload = b64(toClaims(spec).toString());
         return header + "." + payload + ".";
+    }
+
+    /**
+     * 페이로드 JSON 을 <b>그대로</b> 액세스 키(HS256, {@code typ=at+jwt})로 서명한다. claim 값이 Java 타입 변환·직렬화를 거치지
+     * 않으므로 명시적 {@code null}, {@code long} 을 넘는 정수 같은 원시 입력을 만들 때 쓴다.
+     */
+    public static String signedRaw(String payloadJson) {
+        try {
+            JWSObject jws = new JWSObject(
+                    new JWSHeader.Builder(JWSAlgorithm.HS256).type(new JOSEObjectType("at+jwt")).build(),
+                    new Payload(payloadJson));
+            jws.sign(new MACSigner(Base64.getDecoder().decode(ACCESS_SECRET_BASE64)));
+            return jws.serialize();
+        } catch (JOSEException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 토큰 페이로드의 원문 JSON. */
+    public static String payloadJson(String token) {
+        return new String(Base64.getUrlDecoder().decode(token.split("\\.")[1]), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** 서명 부분의 한 글자를 바꾼 토큰. */

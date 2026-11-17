@@ -51,7 +51,7 @@
 | 형식 | JWS(JWT), `alg=HS256` **만** 허용 (allow-list). `none`·RS·ES 등 다른 알고리즘은 거부 |
 | 헤더 | `typ: "at+jwt"` |
 | claim | `iss="railgate-auth"`, `aud="railgate-api"`, `sub`=사용자 id(10진수 문자열, 양수 `long`), `iat`, `exp`, `jti`, `token_use="access"` |
-| **`nbf`** (선택) | 있으면 원래 JSON 값이 정수 숫자(초), `Instant` 범위 안이어야 한다. 잘못된 값은 없음이 아니라 거부 (TASK-002J-B §8) |
+| **시각 claim 타입** | `iat`·`exp`(필수)·`nbf`(선택)는 **원래 JSON 값**이 정수 숫자(초), `Instant` 범위 안이어야 한다. 라이브러리가 변환한 시각을 근거로 쓰지 않는다. `nbf` 누락은 허용, 명시적 `null` 등 잘못된 값은 거부 (TASK-002J-B §8·§9) |
 | 수명 | `exp − iat` = **30분 (가정값)** |
 | 서명키 | **액세스 토큰 전용 키** `K_access`. 발급자(인증)와 검증자(reservation-service·queue-service)가 공유 |
 | 검증 | 서명(`K_access`), `alg`, `typ`, `iss`, `aud` 포함 여부, `token_use`, `exp` > 현재, `iat`·`nbf` 미래 아님, `sub` 형식. 시계 오차 허용 **30초(가정)** |

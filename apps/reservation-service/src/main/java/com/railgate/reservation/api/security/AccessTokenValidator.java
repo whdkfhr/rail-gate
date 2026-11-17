@@ -24,9 +24,10 @@ import org.springframework.security.oauth2.jwt.Jwt;
  *   <li>타입 검사는 <b>원래 JSON 의 값</b>으로 한다. Nimbus 는 숫자 {@code sub} 를 문자열로 정규화해 넘기므로, 서명 검증을
  *       마친 토큰의 페이로드를 같은 라이브러리로 다시 읽어 원래 타입을 본다 (직접 파싱하지 않는다)</li>
  *   <li>{@code iat}·{@code exp} 필수. {@code iat ≤ now + skew}, {@code iat < exp}, {@code exp − iat ≤ maxLifetime},
- *       {@code now ≤ exp + skew}. {@code nbf} 가 있으면 {@code nbf ≤ now + skew}</li>
- *   <li>{@code nbf} 는 선택이지만 <b>있으면 원래 JSON 값</b>이 정수 숫자(초)이고 {@link Instant} 범위 안이어야 한다. 잘못된 값을
- *       없음으로 취급하지 않는다 — 라이브러리 변환이 범위 밖 값을 넘침으로 다른 시각으로 바꾸거나 소수를 잘라 받아들이기 때문이다</li>
+ *       {@code now − skew ≤ exp}. {@code nbf} 가 있으면 {@code nbf ≤ now + skew}</li>
+ *   <li>시각 claim({@code iat}·{@code exp}·{@code nbf})은 <b>원래 JSON 값</b>이 정수 숫자(초)이고 {@link Instant} 범위 안이어야 한다.
+ *       변환된 {@link Jwt} 시각을 쓰지 않는다 — 라이브러리 변환이 {@code 초 × 1000} 넘침으로 다른 시각을 만들거나 소수를 잘라
+ *       받아들이기 때문이다. {@code nbf} 는 선택이지만 잘못된 값을 없음으로 취급하지 않는다</li>
  * </ul>
  *
  * <p>시각은 주입한 {@link Clock} 으로 판단한다. 토큰은 DB 를 거치지 않고 검증해야 하므로 규칙 7(DB {@code NOW(3)})의
@@ -71,7 +72,7 @@ public final class AccessTokenValidator implements OAuth2TokenValidator<Jwt> {
                 && ACCESS.equals(raw.get(TOKEN_USE))
                 && isUserId(raw.get("sub"))
                 && isNonBlankString(raw.get("jti"))
-                && hasValidTimes(jwt, raw);
+                && hasValidTimes(raw);
     }
 
     /** 서명 검증을 마친 토큰의 원래 claim. 다시 읽지 못하면 {@code null} — 거부한다. */
@@ -102,14 +103,17 @@ public final class AccessTokenValidator implements OAuth2TokenValidator<Jwt> {
         return value instanceof String text && !text.isBlank();
     }
 
-    private boolean hasValidTimes(Jwt jwt, Map<String, Object> raw) {
-        Instant iat = jwt.getIssuedAt();
-        Instant exp = jwt.getExpiresAt();
+    /**
+     * 시각은 변환된 {@link Jwt} 값이 아니라 <b>원래 JSON 값</b>으로 판정한다. 라이브러리 변환은 {@code 초 × 1000} 이 넘치면 다른
+     * 시각으로 바꾸고 소수를 잘라 받아들인다. {@code iat}·{@code exp} 는 필수, {@code nbf} 는 선택이지만 있으면 같은 규칙이다
+     * ("없음"과 "잘못된 값"은 다르다). 토큰 값에는 덧셈·뺄셈을 하지 않는다 — 시계 오차는 현재 시각 쪽에 적용한다.
+     */
+    private boolean hasValidTimes(Map<String, Object> raw) {
+        Instant iat = epochSeconds(raw.get("iat"));
+        Instant exp = epochSeconds(raw.get("exp"));
         if (iat == null || exp == null) {
             return false;
         }
-        // nbf 는 선택이지만 "없음"과 "잘못된 값"은 다르다. 라이브러리 변환은 범위 밖 값을 다른 시각으로 바꾸거나(초×1000 넘침)
-        // 소수를 잘라 받아들이므로 원래 JSON 값으로 판정한다.
         Instant nbf = null;
         if (raw.containsKey("nbf")) {
             nbf = epochSeconds(raw.get("nbf"));
@@ -121,7 +125,7 @@ public final class AccessTokenValidator implements OAuth2TokenValidator<Jwt> {
         return !iat.isAfter(now.plus(clockSkew))
                 && iat.isBefore(exp)
                 && !Duration.between(iat, exp).minus(maxLifetime).isPositive()
-                && !now.isAfter(exp.plus(clockSkew))
+                && !now.minus(clockSkew).isAfter(exp)
                 && (nbf == null || !nbf.isAfter(now.plus(clockSkew)));
     }
 
