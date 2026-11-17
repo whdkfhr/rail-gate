@@ -290,3 +290,59 @@ CI 와 같은 순서(같은 키로 선점 완료 → 키 행 삭제 → 같은 �
 - 재시도 예산 3 은 측정으로 정한 값이 아니다. 같은 키에 더 많은 요청이 몰리면 소진될 수 있고, 그때는 데드락 예외가 503 대상 장애로 나간다
 - 데드락 레코드가 삭제 표시 행이라는 것은 강한 정황(결정적 재현·같은 잠금 모양)에 기댄 추정이다
 - 실제 CI 환경에서의 재발 여부는 이 PR 의 CI 실행 결과로만 확인한다 — 한 번 통과는 반증에 실패한 것일 뿐이다
+
+---
+
+## 8. 액세스 토큰 `nbf` 의 원래 값 검증 (2026-11-17, 브랜치 `codex/fix-access-token-nbf`)
+
+TASK-002J-C §8 에서 관측한 문제의 보완이다.
+
+### 재현과 원인
+
+올바른 `K_access` 로 서명한 정상 액세스 토큰에 `nbf` 하나만 잘못 넣으면 **200 으로 통과**했다. 원인은 라이브러리 변환이다.
+Nimbus `JWTClaimsSet` 은 `nbf`·`iat`·`exp` 를 `초 × 1000` 밀리초 `Date` 로 바꾸는데 이 곱셈이 넘치면 다른 시각이 된다
+(jshell, nimbus-jose-jwt 10.9: `nbf=9223372036854775807` → `1969-12-31T23:59:59Z`, `iat=Instant.MIN 초` → `+169108098-07-04`).
+소수 `nbf` 는 잘라서 받는다. 검증기는 변환된 `jwt.getNotBefore()` 만 봤으므로 잘못된 값이 "과거 시각" 이나 "없음" 처럼 판정됐다.
+TASK-002J-C §8 은 "변환에서 빠진다" 고 추정했는데, 실제로는 **넘침으로 과거 시각이 된 것**이다.
+
+### 수정 범위
+
+- `AccessTokenValidator` — `nbf` 가 **원래 JSON 에 있으면** 정수 숫자(초)이고 `Instant` 범위 안이어야 하며, 그 원래 값으로
+  `nbf ≤ now + 30초` 를 판정한다. 아니면 거부(401 `AUTHENTICATION_REQUIRED`, 고정 본문·`WWW-Authenticate: Bearer`). 없으면 이전처럼 통과
+- 범위는 변환 전에 비교하고 예외를 잡지 않는다. 새 오류 코드·메트릭 없음
+- `iat`·`exp` 의 판정은 **바꾸지 않았다** (아래 남은 위험)
+
+### RED → GREEN
+
+| 대상 | RED (수정 전) | GREEN |
+|---|---|---|
+| `AccessTokenAuthenticationTest` §5-1 (신규 10) | 57개 중 **6개 실패** — `nbf` = `Long.MAX/MIN`(2), `Instant` 범위 ±1초, `long` 을 넘는 정수, 소수가 **200**; 범위 안 끝값 `Instant.MIN 초` 가 넘침으로 미래가 되어 **401** | 57/57 |
+
+신규 테스트는 `nbf` 없음(200), 정상 `nbf`·`now+30초`(200)·`now+31초`(401), 문자열·숫자 문자열·ISO 문자열·소수·불리언·배열·객체(401),
+`iat`·`exp` 극단값(이전처럼 401)을 실제 `SecurityFilterChain` 으로 확인한다. 값은 `Date` 를 거치지 않고 넣고, 페이로드 원문에 그 표현이
+그대로 있는지 테스트에서 확인한다. 401 은 기존 `assertUnauthorized`(고정 본문, `WWW-Authenticate: Bearer`, 본문 traceId = `X-Trace-Id`,
+토큰·예외 미노출)로 검증한다.
+
+### 전체 검증
+
+2026-11-17, 이전 XML 을 지운 뒤 `./gradlew check --rerun-tasks --max-workers=1` — `BUILD SUCCESSFUL in 1m 46s`, 24 tasks executed,
+`verifyArchitectureRules` 포함. 입장 토큰 필터·선점 조정자·멱등 테스트도 이 실행에 포함되어 모두 통과했다.
+
+| 모듈 | tests | failures | errors | skipped |
+|---|---:|---:|---:|---:|
+| `apps:queue-service` | 1 | 0 | 0 | 0 |
+| `apps:reservation-service` | 406 | 0 | 0 | 0 |
+| `modules:reservation-domain` | 202 | 0 | 0 | 0 |
+| `modules:reservation-infra` | 621 | 0 | 0 | 0 |
+| `modules:queue-token` | 62 | 0 | 0 | 0 |
+| **합계** | **1,292** | **0** | **0** | **0** |
+
+TASK-002J-C §8 의 1,282개에서 +10.
+
+### 남은 위험
+
+- **`iat`·`exp` 도 같은 넘침 변환을 거친다.** `Long.MAX/MIN` 극단값은 401 이지만, `9.2×10^15 초` 를 넘고 `Instant` 범위 안인 값은
+  다른 시각으로 바뀐 채 판정된다. 이번 범위(“iat·exp 기존 동작 유지”)라 고치지 않았다. 원래 JSON 값으로 판정하도록 바꾸는 후속이 필요하다
+- `iat`·`exp` 의 타입(문자열·소수)도 라이브러리 변환에 맡긴다 — 입장 토큰처럼 정수만 받는 계약은 아직 없다
+- `exp + 시계 오차` 와 `now + 시계 오차` 는 설정(`max-lifetime`·`clock-skew`)이 매우 크면 넘칠 수 있다 — 입장 토큰은 기동 검증을 넣었지만
+  액세스 토큰은 아직 없다

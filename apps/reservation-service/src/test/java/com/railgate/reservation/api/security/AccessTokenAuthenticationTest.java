@@ -8,13 +8,16 @@ import com.railgate.reservation.support.SecuredWebTestSupport;
 import com.railgate.reservation.support.TestAccessTokens;
 import com.railgate.testprobe.AuthProbeController;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -317,6 +320,106 @@ class AccessTokenAuthenticationTest extends SecuredWebTestSupport {
             assertUnauthorized(probe(token(s -> s.claim("exp", Date.from(NOW.plus(Duration.ofMinutes(30)).plusSeconds(1))))), null);
             assertUnauthorized(probe(token(s -> s.claim("iat", Date.from(NOW))
                     .claim("exp", Date.from(NOW.minusSeconds(1))))), null);
+        }
+    }
+
+    // ------------------------------------------------------------------ §5-1 nbf 의 원래 값 (TASK-002J-C §8 후속)
+
+    @Nested
+    @DisplayName("§5-1 ★ 선택 claim nbf — 없음과 잘못된 값을 구분한다")
+    class Nbf_원래_값 {
+
+        private static final long MAX_EPOCH = Instant.MAX.getEpochSecond();
+        private static final long MIN_EPOCH = Instant.MIN.getEpochSecond();
+
+        private static String payload(String token) {
+            return new String(Base64.getUrlDecoder().decode(token.split("\\.")[1]), StandardCharsets.UTF_8);
+        }
+
+        /** nbf 값을 Date 로 바꾸지 않고 그대로 넣고, 페이로드 원문에 그 표현이 있는지 확인한 토큰. */
+        private String nbf(Object value, String expectedJson) {
+            String token = token(s -> s.claim("nbf", value));
+            assertThat(payload(token)).as("생성 과정에서 값이 바뀌지 않았다").contains("\"nbf\":" + expectedJson);
+            return token;
+        }
+
+        @Test
+        void nbf_가_없으면_통과한다() throws Exception {
+            String token = token(s -> s.without("nbf"));
+            assertThat(payload(token)).doesNotContain("nbf");
+            assertThat(probe(token).statusCode()).isEqualTo(200);
+        }
+
+        @Test
+        void 정상_nbf_와_시계_오차_경계는_그대로다() throws Exception {
+            assertThat(probe(nbf(NOW.getEpochSecond(), Long.toString(NOW.getEpochSecond()))).statusCode()).isEqualTo(200);
+            long edge = NOW.plusSeconds(30).getEpochSecond();
+            assertThat(probe(nbf(edge, Long.toString(edge))).statusCode()).as("now + 30초").isEqualTo(200);
+            long over = NOW.plusSeconds(31).getEpochSecond();
+            String token = nbf(over, Long.toString(over));
+            assertUnauthorized(probe(token), token);
+        }
+
+        /** ★ RED 대상 — 수정 전에는 변환 중 nbf 가 빠져 "없음" 처럼 통과했다 (200). */
+        @ParameterizedTest
+        @ValueSource(longs = {Long.MAX_VALUE, Long.MIN_VALUE})
+        void long_극단값_nbf_는_401(long value) throws Exception {
+            String token = nbf(value, Long.toString(value));
+            assertUnauthorized(probe(token), token);
+        }
+
+        @Test
+        void Instant_범위_바로_바깥의_nbf_는_401() throws Exception {
+            for (long value : new long[] {MAX_EPOCH + 1, MIN_EPOCH - 1}) {
+                String token = nbf(value, Long.toString(value));
+                assertUnauthorized(probe(token), token);
+            }
+        }
+
+        @Test
+        void long_을_넘는_정수_nbf_는_401() throws Exception {
+            for (String huge : new String[] {"9223372036854775808", "-9223372036854775809"}) {
+                String token = nbf(new BigInteger(huge), huge);
+                assertUnauthorized(probe(token), token);
+            }
+        }
+
+        /** Instant 범위 안의 끝값은 변환되므로 기존 규칙(nbf ≤ now + 30초)대로 판정한다. */
+        @Test
+        void Instant_범위_안의_끝값은_기존_규칙으로_판정한다() throws Exception {
+            assertThat(probe(nbf(MIN_EPOCH, Long.toString(MIN_EPOCH))).statusCode()).isEqualTo(200);
+            String future = nbf(MAX_EPOCH, Long.toString(MAX_EPOCH));
+            assertUnauthorized(probe(future), future);
+        }
+
+        /** nbf 는 정수 JSON 숫자(초)만 받는다 — 문자열·소수·불리언·배열·객체·null 은 잘못된 값이다. */
+        @Test
+        void 정수_숫자가_아닌_nbf_는_401() throws Exception {
+            long past = NOW.minusSeconds(60).getEpochSecond();
+            Object[][] cases = {
+                    {"now", "\"now\""},
+                    {Long.toString(past), "\"" + past + "\""},
+                    {NOW.minusSeconds(60).toString(), "\"" + NOW.minusSeconds(60) + "\""},
+                    {past + 0.5, Double.toString(past + 0.5)},
+                    {true, "true"},
+                    {List.of(past), "[" + past + "]"},
+                    {Map.of("v", past), "{\"v\":" + past + "}"},
+            };
+            for (Object[] c : cases) {
+                String token = nbf(c[0], (String) c[1]);
+                assertThat(probe(token).statusCode()).as("nbf=" + c[1]).isEqualTo(401);
+            }
+        }
+
+        /** 회귀 — iat·exp 의 극단값은 이전처럼 401 이다. */
+        @ParameterizedTest
+        @ValueSource(strings = {"iat", "exp"})
+        void iat_exp_극단값은_이전처럼_401(String claim) throws Exception {
+            for (long value : new long[] {Long.MAX_VALUE, Long.MIN_VALUE}) {
+                String token = token(s -> s.claim(claim, value));
+                assertThat(payload(token)).contains("\"" + claim + "\":" + value);
+                assertUnauthorized(probe(token), token);
+            }
         }
     }
 
