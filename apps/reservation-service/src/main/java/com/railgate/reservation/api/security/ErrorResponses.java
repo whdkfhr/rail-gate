@@ -18,6 +18,10 @@ final class ErrorResponses {
     static final String UNAUTHORIZED_MESSAGE = "인증이 필요합니다.";
     static final String FORBIDDEN_CODE = "FORBIDDEN";
     static final String FORBIDDEN_MESSAGE = "이 요청을 수행할 권한이 없습니다.";
+    static final String ADMISSION_TOKEN_INVALID_CODE = "ADMISSION_TOKEN_INVALID";
+    static final String ADMISSION_TOKEN_INVALID_MESSAGE = "입장 권한을 확인할 수 없습니다.";
+    static final String ADMISSION_USER_MISMATCH_CODE = "ADMISSION_USER_MISMATCH";
+    static final String ADMISSION_USER_MISMATCH_MESSAGE = "입장 권한의 사용자가 로그인 사용자와 다릅니다.";
 
     private ErrorResponses() {
     }

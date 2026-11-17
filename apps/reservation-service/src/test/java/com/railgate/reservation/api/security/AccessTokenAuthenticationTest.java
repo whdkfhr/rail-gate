@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.railgate.reservation.api.trace.TraceIdFilter;
 import com.railgate.reservation.support.MutableClock;
-import com.railgate.reservation.support.MySqlSpringTestSupport;
+import com.railgate.reservation.support.SecuredWebTestSupport;
 import com.railgate.reservation.support.TestAccessTokens;
 import com.railgate.testprobe.AuthProbeController;
 import java.io.IOException;
@@ -27,45 +27,24 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.json.JsonParserFactory;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.ApplicationContext;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 
 /**
  * ★ Task 2J-B — <b>실제 SecurityFilterChain</b>(내장 서버 + 실제 필터 등록)으로 액세스 토큰 검증을 확인한다 (ADR-015 §3).
  *
  * <p>확인용 컨트롤러와 시계는 이 테스트의 {@link TestConfiguration} 에만 있다 — 운영 경로가 아니다.
- * {@code @Nested} 클래스도 같은 컨텍스트를 쓰도록 {@link Import} 로 명시한다.
+ * 컨텍스트 구성은 {@link SecuredWebTestSupport} 와 공유한다 (같은 구성 = 같은 컨텍스트).
  * 시간 경계는 {@link MutableClock} 으로 옮기고 {@code Thread.sleep} 을 쓰지 않는다.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(AccessTokenAuthenticationTest.ProbeConfig.class)
 @DisplayName("Task 2J-B — 액세스 토큰 검증 (SecurityFilterChain)")
-class AccessTokenAuthenticationTest extends MySqlSpringTestSupport {
+class AccessTokenAuthenticationTest extends SecuredWebTestSupport {
 
-    private static final Instant NOW = Instant.parse("2030-01-01T00:00:00Z");
     private static final long USER = 4242L;
     private static final String PROBE = AuthProbeController.PATH;
     private static final String FIXED_401_MESSAGE = "인증이 필요합니다.";
-
-    @TestConfiguration
-    static class ProbeConfig {
-
-        @Bean
-        @Primary
-        MutableClock testAuthClock() {
-            return new MutableClock(NOW);
-        }
-
-        @Bean
-        AuthProbeController authProbeController() {
-            return new AuthProbeController();
-        }
-    }
 
     @LocalServerPort
     private int port;

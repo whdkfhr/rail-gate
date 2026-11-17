@@ -15,4 +15,8 @@ plugins {
 // ---------------------------------------------------------------------------
 dependencies {
     api(project(":modules:common"))
+
+    // Task 2J-C. 입장 토큰의 서명 검증·JSON 파싱. 직접 구현하지 않는다.
+    // Spring·Servlet·Redis·HTTP 클라이언트에 의존하지 않는다 — 검증은 네트워크 없이 끝난다 (절대 규칙 4, I-7).
+    implementation(libs.nimbus.jose.jwt)
 }

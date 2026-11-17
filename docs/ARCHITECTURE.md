@@ -424,7 +424,7 @@ filesort 없이 `LIMIT` 이 조기 종료한다 — 전체 좌석이 5배가 돼
 ### 대기열 입장 범위와 quota 범위 (목표 설계)
 
 > **현재 `queue-service` 는 골격 단계다.** Spring Boot 애플리케이션 클래스와 컨텍스트 로드 테스트만
-> 있고, `queue-domain`·`queue-token` 에는 아직 소스가 없다. Redis 키 계약(`rg:{evt:E1}:*`)과
+> 있고, `queue-domain` 에는 아직 소스가 없다. `queue-token` 에는 **입장 토큰 검증기만** 있다(Task 2J-C, 발급기 없음). Redis 키 계약(`rg:{evt:E1}:*`)과
 > 입장 토큰의 `evt` 클레임은 §2 의 **목표 설계**이며 구현되지 않았다.
 
 목표 대기열 설계는 **이벤트 단위 입장 제어**를 사용한다. quota 범위를 판매 이벤트로 정한
