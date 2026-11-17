@@ -346,3 +346,64 @@ TASK-002J-C §8 의 1,282개에서 +10.
 - `iat`·`exp` 의 타입(문자열·소수)도 라이브러리 변환에 맡긴다 — 입장 토큰처럼 정수만 받는 계약은 아직 없다
 - `exp + 시계 오차` 와 `now + 시계 오차` 는 설정(`max-lifetime`·`clock-skew`)이 매우 크면 넘칠 수 있다 — 입장 토큰은 기동 검증을 넣었지만
   액세스 토큰은 아직 없다
+
+---
+
+## 9. 액세스 토큰 `iat`·`exp` 의 원래 값 검증 (2026-11-17, 브랜치 `codex/fix-access-token-numeric-dates`)
+
+§8 의 남은 위험 첫 두 항목의 보완이다. §8 의 기록은 그대로 둔다.
+
+### 재현과 원인
+
+§8 과 같은 넘침이다. Nimbus 가 `iat`·`exp` 를 `초 × 1000` 밀리초 `Date` 로 바꾸므로 `Long.MAX_VALUE / 1000`(약 9.2×10^15)을 넘는 초는
+다른 시각으로 감긴다. 검증기는 감긴 `jwt.getIssuedAt()`·`getExpiresAt()` 으로 판정했다.
+
+- 원래 값이 약 1.8×10^16 초(`Instant` 범위 안의 먼 미래)인 `exp` 가 "지금 + 10분" 으로 감겨 **최대 수명 검사를 통과**했다 (200)
+- 같은 방식의 `iat` 가 "지금" 으로 감겨 **미래 발급 검사를 통과**했다 (200)
+- 소수 초(`iat`·`exp` = `…​.5`)는 잘려 정수로 받아들여졌다 (200)
+
+`Long.MAX/MIN`, `Instant` 범위 ±1초, `long` 을 넘는 정수, `null`·문자열·ISO 문자열·불리언·배열·객체, 누락은 **수정 전에도 401** 이었다
+(라이브러리 파싱 실패이거나 감긴 시각이 허용 구간 밖) — 회귀 테스트로 고정했고 RED 로 세지 않았다.
+
+### 수정 범위
+
+- `AccessTokenValidator` — `iat`·`exp` 를 서명 검증 뒤 이미 읽는 **원래 JSON** 에서 가져와 `nbf` 와 같은 규칙(정수 숫자 초, `Instant` 범위 안)으로
+  판정한다. 변환된 `Jwt` 시각은 검증 근거로 쓰지 않는다. `iat`·`exp` 는 필수(없으면 거부), `nbf` 는 선택(없으면 통과, 명시적 `null` 은 거부)
+- 만료 비교를 `now ≤ exp + skew` 에서 동치인 `now − skew ≤ exp` 로 바꿨다 — 토큰 값에 덧셈·뺄셈을 하지 않는다. `Duration.between(iat, exp)` 은
+  두 값이 `Instant` 범위 안이면 넘치지 않는다. `now ± skew` 는 현재 시각과 설정만 쓴다
+- 예외를 잡지 않는다. 잘못된 토큰은 기존 401 `AUTHENTICATION_REQUIRED`. 수명 30분·오차 30초(D-A4 가정값)와 경계는 바꾸지 않았다
+
+### RED → GREEN
+
+| 대상 | RED (수정 전) | GREEN |
+|---|---|---|
+| `AccessTokenAuthenticationTest` §5-2 (신규 13) | 70개 중 **4개 실패** — 감긴 `exp`, 감긴 `iat`, 소수 `iat`·`exp` 가 **200** | 70/70 |
+
+테스트는 페이로드 JSON 을 **원문 그대로 서명**하는 테스트 도우미(`TestAccessTokens.signedRaw`)로 만들고, 서명 전후 원문이 같은지 확인한다 —
+명시적 `"nbf":null` 이 직렬화에서 사라지지 않았음도 원문으로 본다. 감기는 값은 `초 × 1000` 이 실제로 목표 시각 1초 안으로 감기는지
+테스트 안에서 단언한 뒤 쓴다. 401 은 기존 `assertUnauthorized`(고정 본문, `WWW-Authenticate: Bearer`, 본문 traceId = `X-Trace-Id`, 토큰·예외 미노출)로 확인한다.
+기존 경계(발급 now+30초 허용·+31초 거부, 수명 30분 허용·+1초 거부, `exp ≤ iat` 거부, 만료 +30초 허용·+31초 거부)를 원문 토큰으로 다시 확인한다.
+
+### 전체 검증
+
+2026-11-17, `docker info` 확인, 이전 XML 을 지운 뒤 `./gradlew check --rerun-tasks --max-workers=1` — `BUILD SUCCESSFUL in 1m 51s`,
+24 tasks executed, `verifyArchitectureRules` 포함. 입장 토큰 필터·선점 조정자·멱등 테스트도 이 실행에서 모두 통과했다.
+
+| 모듈 | tests | failures | errors | skipped |
+|---|---:|---:|---:|---:|
+| `apps:queue-service` | 1 | 0 | 0 | 0 |
+| `apps:reservation-service` | 419 | 0 | 0 | 0 |
+| `modules:reservation-domain` | 202 | 0 | 0 | 0 |
+| `modules:reservation-infra` | 621 | 0 | 0 | 0 |
+| `modules:queue-token` | 62 | 0 | 0 | 0 |
+| **합계** | **1,305** | **0** | **0** | **0** |
+
+§8 의 1,292개에서 +13.
+
+### 남은 위험
+
+- **설정 위험** — 액세스 토큰은 매우 큰 `clock-skew` 를 기동 시 거부하지 않는다. 그런 설정이면 요청마다 `now ± skew` 가 넘쳐 예외가 난다
+  (토큰과 무관한 설정 오류이고, 이번에 넓은 예외 처리로 감추지 않았다). 매우 큰 `max-lifetime` 은 넘침이 아니라 의미의 문제다. 입장 토큰처럼
+  기동 검증을 넣는 후속이 필요하다
+- 수명 30분·시계 오차 30초는 여전히 D-A4 가정값이다
+- `sub`·`jti`·`token_use` 외 `iss`·`aud` 는 라이브러리 변환 값으로 비교한다 (이번 범위 밖)
